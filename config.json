@@ -1,0 +1,22 @@
+{
+    "server": {
+        "host": "0.0.0.0",
+        "port": 9999,
+        "log_file": "signals.log"
+    },
+    "credentials": {
+        "admin_password": "admin123",
+        "customer_password": "cust123"
+    },
+    "signal_settings": {
+        "expiry_minutes": 5,
+        "check_interval_seconds": 60
+    },
+    "database": {
+        "enabled": true,
+        "file": "signals.db"
+    },
+    "signal_format": {
+        "required_fields": ["symbol", "price", "sl", "tp", "type"]
+    }
+}
