@@ -46,20 +46,25 @@ class TradingSignalServer:
             }
             print("⚠️ config.json not found, using default config")
         
+        # === PERBAIKAN UNTUK CLOUD DEPLOYMENT ===
+        # Gunakan port dari environment variable jika ada
         self.host = self.config['server']['host']
-        self.port = self.config['server']['port']
-        self.admin_password = self.config['credentials']['admin_password']
-        self.customer_password = self.config['credentials']['customer_password']
+        self.port = int(os.environ.get('PORT', self.config['server']['port']))
+        
+        # Gunakan password dari environment variable jika ada
+        self.admin_password = os.environ.get('ADMIN_PASSWORD', self.config['credentials']['admin_password'])
+        self.customer_password = os.environ.get('CUSTOMER_PASSWORD', self.config['credentials']['customer_password'])
+        # ========================================
+        
         self.expiry_minutes = self.config['signal_settings']['expiry_minutes']
         self.max_active_signals = self.config['signal_settings'].get('max_active_signals', 10)
         
-        # Data storage - PERUBAHAN BESAR
+        # Data storage
         self.active_signals = []  # List of active signals
         self.signal_lock = threading.Lock()
         self.running = True
         
         # Tracking signal deliveries per customer
-        # Format: {customer_id: set(signal_id1, signal_id2, ...)}
         self.customer_received_signals = {}
         
         # Setup socket
@@ -716,6 +721,9 @@ def signal_handler(sig, frame):
 
 def main():
     """Main function"""
+    # === PERBAIKAN: Dapatkan port dari environment ===
+    port = int(os.environ.get('PORT', 9999))
+    
     print("=" * 60)
     print("        TRADING SIGNAL SERVER v3.0 - MULTI-SIGNAL")
     print("=" * 60)
@@ -723,8 +731,9 @@ def main():
     print("=" * 60)
     print(f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"🐍 Python: {sys.version}")
+    print(f"🌐 Port: {port}")
     print(f"📊 Database: {'Enabled' if DB_ENABLED else 'Disabled (fallback mode)'}")
-    print(f"🔒 Password: customer='cust123', admin='admin123'")
+    print(f"🔒 Password: customer='{os.environ.get('CUSTOMER_PASSWORD', 'cust123')}', admin='{os.environ.get('ADMIN_PASSWORD', 'admin123')}'")
     print(f"📈 Max active signals: 10")
     print(f"⏰ Signal expiry: 5 minutes")
     print("=" * 60)
