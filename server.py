@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+Trading Signal Server v4.0 - WITH API KEY FOR BOTH ADMIN & CUSTOMER
+Enhanced security with API Key authentication for all users
+"""
+
 import socket
 import threading
 import json
@@ -34,9 +40,10 @@ class TradingSignalServer:
         except FileNotFoundError:
             self.config = {
                 'server': {'host': '0.0.0.0', 'port': 9999},
-                'credentials': {
-                    'admin_password': 'admin123',
-                    'customer_password': 'cust123'
+                'security': {
+                    'rate_limit_per_minute': 60,
+                    'max_connections': 100,
+                    'session_timeout_minutes': 30
                 },
                 'signal_settings': {
                     'expiry_minutes': 5,
@@ -46,28 +53,29 @@ class TradingSignalServer:
             }
             print("⚠️ config.json not found, using default config")
         
-        # === PERBAIKAN UNTUK CLOUD DEPLOYMENT ===
-        # Gunakan port dari environment variable jika ada
+        # === CLOUD DEPLOYMENT SETTINGS ===
         self.host = self.config['server']['host']
         self.port = int(os.environ.get('PORT', self.config['server']['port']))
         
-        # Gunakan password dari environment variable jika ada
-        self.admin_password = os.environ.get('ADMIN_PASSWORD', self.config['credentials']['admin_password'])
-        self.customer_password = os.environ.get('CUSTOMER_PASSWORD', self.config['credentials']['customer_password'])
-        # ========================================
-        
-        # === SECURITY IMPROVEMENTS ===
-        # Load API Keys untuk customer authentication
-        self.customer_api_keys = self.load_api_keys()
+        # === SECURITY SETTINGS ===
+        # Load API Keys for both admins and customers
+        self.admin_api_keys, self.customer_api_keys = self.load_api_keys()
         
         # Rate limiting
-        self.rate_limits = {}  # customer_id: [timestamps]
-        self.max_requests_per_minute = 60
+        self.rate_limits = {}  # user_id: [timestamps]
+        self.max_requests_per_minute = self.config['security'].get('rate_limit_per_minute', 60)
+        
+        # Admin rate limit (higher limit)
+        self.admin_max_requests = 120
         
         # Connection tracking
         self.active_connections = 0
-        self.max_connections = 100
+        self.max_connections = self.config['security'].get('max_connections', 100)
         self.connection_lock = threading.Lock()
+        
+        # Session tracking
+        self.active_sessions = {}  # session_id: {user_id, login_time, last_activity}
+        self.session_timeout = self.config['security'].get('session_timeout_minutes', 30) * 60
         # =============================
         
         self.expiry_minutes = self.config['signal_settings']['expiry_minutes']
@@ -80,6 +88,9 @@ class TradingSignalServer:
         
         # Tracking signal deliveries per customer
         self.customer_received_signals = {}
+        
+        # Admin activity log
+        self.admin_activities = []
         
         # Setup socket
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -94,100 +105,209 @@ class TradingSignalServer:
         
         self.log_info(f"Server initialized at {self.host}:{self.port}")
         self.log_info("Mode: Each customer gets EACH active signal ONCE")
-        self.log_info(f"Max active signals: {self.max_active_signals}")
-        self.log_info(f"Loaded {len(self.customer_api_keys)} customer API keys")
+        self.log_info(f"Security: API Key authentication for ALL users")
+        self.log_info(f"Admins: {len(self.admin_api_keys)} | Customers: {len(self.customer_api_keys)}")
+        self.log_info(f"Rate limit: Customers={self.max_requests_per_minute}/min, Admins={self.admin_max_requests}/min")
     
     def load_api_keys(self):
-        """Load API keys from file or use defaults"""
+        """Load API keys from file for both admins and customers"""
         api_keys_file = 'api_keys.json'
         
         try:
             if os.path.exists(api_keys_file):
                 with open(api_keys_file, 'r') as f:
-                    api_keys = json.load(f)
-                    self.log_info(f"Loaded {len(api_keys)} API keys from {api_keys_file}")
-                    return api_keys
+                    all_keys = json.load(f)
+                    
+                    # Separate admin and customer keys
+                    admin_keys = all_keys.get('admins', {})
+                    customer_keys = all_keys.get('customers', {})
+                    
+                    self.log_info(f"Loaded {len(admin_keys)} admin keys and {len(customer_keys)} customer keys")
+                    return admin_keys, customer_keys
         except Exception as e:
             self.log_warning(f"Error loading API keys: {e}")
         
-        # Default API keys (untuk testing/fallback)
-        default_keys = {
-            "CUST_001": "sk_live_abc123def456",
-            "CUST_002": "sk_live_xyz789uvw012",
-            "CUST_003": "sk_live_mno345pqr678",
-            "CUST_004": "sk_live_jkl234mno567",
-            "CUST_005": "sk_live_efg890hij123"
+        # Default API keys (for testing/fallback)
+        default_admin_keys = {
+            "ADMIN_001": "sk_admin_secure123",
+            "ADMIN_002": "sk_admin_secure456",
+            "SUPER_ADMIN": "sk_admin_super789"
+        }
+        
+        default_customer_keys = {
+            "CUST_001": "sk_cust_abc123def456",
+            "CUST_002": "sk_cust_xyz789uvw012",
+            "CUST_003": "sk_cust_mno345pqr678",
+            "CUST_004": "sk_cust_jkl234mno567",
+            "CUST_005": "sk_cust_efg890hij123"
         }
         
         self.log_warning(f"Using default API keys. Create {api_keys_file} for production.")
-        return default_keys
+        return default_admin_keys, default_customer_keys
     
-    def check_rate_limit(self, customer_id):
-        """Check if customer has exceeded rate limit"""
+    def check_rate_limit(self, user_id, is_admin=False):
+        """Check if user has exceeded rate limit"""
         now = time.time()
         one_minute_ago = now - 60
         
+        # Use different limits for admin and customer
+        max_requests = self.admin_max_requests if is_admin else self.max_requests_per_minute
+        
         # Initialize if not exists
-        if customer_id not in self.rate_limits:
-            self.rate_limits[customer_id] = []
+        if user_id not in self.rate_limits:
+            self.rate_limits[user_id] = []
         
         # Remove old requests
-        self.rate_limits[customer_id] = [
-            t for t in self.rate_limits[customer_id] 
+        self.rate_limits[user_id] = [
+            t for t in self.rate_limits[user_id] 
             if t > one_minute_ago
         ]
         
         # Check limit
-        if len(self.rate_limits[customer_id]) >= self.max_requests_per_minute:
+        if len(self.rate_limits[user_id]) >= max_requests:
             return False
         
         # Add current request
-        self.rate_limits[customer_id].append(now)
+        self.rate_limits[user_id].append(now)
+        return True
+    
+    def create_session(self, user_id, client_type):
+        """Create new session for user"""
+        session_id = str(uuid.uuid4())
+        self.active_sessions[session_id] = {
+            'user_id': user_id,
+            'client_type': client_type,
+            'login_time': time.time(),
+            'last_activity': time.time()
+        }
+        return session_id
+    
+    def validate_session(self, session_id, user_id):
+        """Validate user session"""
+        if session_id not in self.active_sessions:
+            return False
+        
+        session = self.active_sessions[session_id]
+        
+        # Check if session belongs to user
+        if session['user_id'] != user_id:
+            return False
+        
+        # Check if session expired
+        current_time = time.time()
+        if current_time - session['last_activity'] > self.session_timeout:
+            del self.active_sessions[session_id]
+            return False
+        
+        # Update last activity
+        session['last_activity'] = current_time
         return True
     
     def authenticate(self, request, client_type):
         """
-        Authenticate client with multiple methods:
-        1. Legacy: password field
-        2. API Key: api_key field
-        3. Customer ID + API Key
+        Authenticate client with API Key (both admin and customer)
+        Also supports legacy password for backward compatibility
         """
         password = request.get('password', '')
         api_key = request.get('api_key', '')
-        customer_id = request.get('customer_id', '')
+        user_id = request.get('admin_id') if client_type == 'admin' else request.get('customer_id', '')
+        session_id = request.get('session_id', '')
+        
+        # If session ID provided, validate it
+        if session_id and user_id:
+            if self.validate_session(session_id, user_id):
+                return True, user_id
         
         if client_type == 'admin':
-            # Admin hanya pakai password
-            return password == self.admin_password
+            # Method 1: API Key authentication
+            if api_key:
+                # Check if API key exists in admin keys
+                for admin_id, key in self.admin_api_keys.items():
+                    if api_key == key:
+                        # If admin_id provided, must match
+                        if user_id and user_id != admin_id:
+                            continue
+                        
+                        # Create session
+                        session_id = self.create_session(admin_id, 'admin')
+                        self.log_info(f"Admin authenticated via API key: {admin_id}, Session: {session_id[:8]}...")
+                        
+                        # Log admin activity
+                        self.log_admin_activity(admin_id, "login", "API Key authentication")
+                        
+                        return True, admin_id, session_id
+            
+            # Method 2: Legacy password (backward compatibility)
+            if password:
+                # Check if password matches any admin key (for migration)
+                for admin_id, key in self.admin_api_keys.items():
+                    if password == key:
+                        self.log_info(f"Admin authenticated via legacy password: {admin_id}")
+                        
+                        # Create session
+                        session_id = self.create_session(admin_id, 'admin')
+                        self.log_admin_activity(admin_id, "login", "Legacy password")
+                        
+                        return True, admin_id, session_id
+            
+            self.log_warning(f"Admin authentication failed for: {user_id}")
+            return False, None, None
         
         elif client_type == 'customer':
-            # Method 1: Legacy password (backward compatibility)
-            if password and password == self.customer_password:
-                self.log_info(f"Customer authenticated via legacy password: {customer_id}")
-                return True
-            
-            # Method 2: API Key authentication
+            # Method 1: API Key authentication
             if api_key:
-                # Check if API key exists
+                # Check if API key exists in customer keys
                 for cust_id, key in self.customer_api_keys.items():
                     if api_key == key:
-                        # Jika customer_id disediakan, harus match
-                        if customer_id and customer_id != cust_id:
+                        # If customer_id provided, must match
+                        if user_id and user_id != cust_id:
                             continue
-                        self.log_info(f"Customer authenticated via API key: {cust_id}")
-                        return True
+                        
+                        # Create session
+                        session_id = self.create_session(cust_id, 'customer')
+                        self.log_info(f"Customer authenticated via API key: {cust_id}, Session: {session_id[:8]}...")
+                        
+                        return True, cust_id, session_id
             
-            # Method 3: Customer ID + API Key validation
-            if customer_id and api_key:
-                expected_key = self.customer_api_keys.get(customer_id)
-                if expected_key and api_key == expected_key:
-                    self.log_info(f"Customer authenticated via customer_id+api_key: {customer_id}")
-                    return True
+            # Method 2: Legacy password (backward compatibility)
+            if password:
+                # Check if password matches any customer key (for migration)
+                for cust_id, key in self.customer_api_keys.items():
+                    if password == key:
+                        self.log_info(f"Customer authenticated via legacy password: {cust_id}")
+                        
+                        # Create session
+                        session_id = self.create_session(cust_id, 'customer')
+                        
+                        return True, cust_id, session_id
             
-            self.log_warning(f"Authentication failed for customer: {customer_id}")
-            return False
+            self.log_warning(f"Customer authentication failed for: {user_id}")
+            return False, None, None
         
-        return False
+        return False, None, None
+    
+    def log_admin_activity(self, admin_id, action, details=""):
+        """Log admin activity for auditing"""
+        activity = {
+            'admin_id': admin_id,
+            'action': action,
+            'details': details,
+            'timestamp': datetime.now().isoformat(),
+            'ip': threading.current_thread().name
+        }
+        
+        self.admin_activities.append(activity)
+        
+        # Keep only last 100 activities
+        if len(self.admin_activities) > 100:
+            self.admin_activities = self.admin_activities[-100:]
+        
+        # Log to database if enabled
+        if DB_ENABLED:
+            try:
+                database.log_admin_activity(admin_id, action, details)
+            except Exception as db_err:
+                self.log_warning(f"Database activity log warning: {db_err}")
     
     def init_database(self):
         """Initialize database tables"""
@@ -228,8 +348,9 @@ class TradingSignalServer:
             self.log_info("📡 Waiting for connections...")
             self.log_info("🔔 Mode: Each customer gets EACH active signal ONCE")
             self.log_info(f"📊 Max active signals: {self.max_active_signals}")
-            self.log_info(f"🔒 Security: API Key authentication enabled")
-            self.log_info(f"⚡ Rate limit: {self.max_requests_per_minute} requests/minute")
+            self.log_info(f"🔒 Security: API Key authentication for ALL users")
+            self.log_info(f"👥 Admins: {len(self.admin_api_keys)} | Customers: {len(self.customer_api_keys)}")
+            self.log_info(f"⚡ Rate limit: Customers={self.max_requests_per_minute}/min, Admins={self.admin_max_requests}/min")
             
             # Thread untuk menerima koneksi
             accept_thread = threading.Thread(target=self.accept_connections)
@@ -251,6 +372,11 @@ class TradingSignalServer:
             rate_limit_thread.daemon = True
             rate_limit_thread.start()
             
+            # Thread untuk session cleanup
+            session_thread = threading.Thread(target=self.cleanup_sessions)
+            session_thread.daemon = True
+            session_thread.start()
+            
             # Tunggu sampai server dimatikan
             while self.running:
                 time.sleep(1)
@@ -271,21 +397,44 @@ class TradingSignalServer:
                 now = time.time()
                 five_minutes_ago = now - 300
                 
-                for customer_id in list(self.rate_limits.keys()):
+                for user_id in list(self.rate_limits.keys()):
                     # Hapus entries yang lebih dari 5 menit
-                    self.rate_limits[customer_id] = [
-                        t for t in self.rate_limits[customer_id] 
+                    self.rate_limits[user_id] = [
+                        t for t in self.rate_limits[user_id] 
                         if t > five_minutes_ago
                     ]
                     
                     # Jika kosong, hapus key
-                    if not self.rate_limits[customer_id]:
-                        del self.rate_limits[customer_id]
+                    if not self.rate_limits[user_id]:
+                        del self.rate_limits[user_id]
                 
-                self.log_info(f"🧹 Rate limits cleanup: {len(self.rate_limits)} active customers")
+                self.log_info(f"🧹 Rate limits cleanup: {len(self.rate_limits)} active users")
                 
             except Exception as e:
                 self.log_error(f"Error in rate limit cleanup: {e}")
+    
+    def cleanup_sessions(self):
+        """Clean up expired sessions"""
+        while self.running:
+            time.sleep(60)  # Check every minute
+            
+            try:
+                now = time.time()
+                expired_sessions = []
+                
+                for session_id, session in self.active_sessions.items():
+                    if now - session['last_activity'] > self.session_timeout:
+                        expired_sessions.append(session_id)
+                
+                # Remove expired sessions
+                for session_id in expired_sessions:
+                    del self.active_sessions[session_id]
+                
+                if expired_sessions:
+                    self.log_info(f"🧹 Session cleanup: Removed {len(expired_sessions)} expired sessions")
+                    
+            except Exception as e:
+                self.log_error(f"Error in session cleanup: {e}")
     
     def accept_connections(self):
         """Accept connections from clients"""
@@ -309,7 +458,7 @@ class TradingSignalServer:
                 
                 self.log_info(f"🔌 New connection from {address} (Active: {self.active_connections}/{self.max_connections})")
                 
-                # Log ke database - dengan error handling
+                # Log ke database
                 if DB_ENABLED:
                     try:
                         database.add_client_connection('unknown', str(address))
@@ -338,41 +487,50 @@ class TradingSignalServer:
             
             request = json.loads(data)
             
+            # Identifikasi tipe client
+            client_type = request.get('client_type', 'customer')
+            user_id = request.get('admin_id') if client_type == 'admin' else request.get('customer_id', f"IP_{address[0]}")
+            
             # === RATE LIMITING ===
-            customer_id = request.get('customer_id', f"IP_{address[0]}")
-            if not self.check_rate_limit(customer_id):
+            if not self.check_rate_limit(user_id, client_type == 'admin'):
                 response = {
                     'status': 'error', 
-                    'message': f'Rate limit exceeded. Maximum {self.max_requests_per_minute} requests per minute.'
+                    'message': f'Rate limit exceeded. Maximum {self.admin_max_requests if client_type == "admin" else self.max_requests_per_minute} requests per minute.'
                 }
                 client_socket.send(json.dumps(response).encode('utf-8'))
                 client_socket.close()
-                self.log_warning(f"Rate limit exceeded for {customer_id}")
+                self.log_warning(f"Rate limit exceeded for {user_id}")
                 return
             
-            # Authentikasi
-            client_type = request.get('client_type', 'customer')
-            if not self.authenticate(request, client_type):
-                response = {'status': 'error', 'message': 'Authentication failed'}
+            # Authentikasi dengan API Key
+            auth_result, auth_user_id, session_id = self.authenticate(request, client_type)
+            if not auth_result:
+                response = {
+                    'status': 'error', 
+                    'message': 'Authentication failed. Check your API Key or credentials.'
+                }
                 client_socket.send(json.dumps(response).encode('utf-8'))
                 client_socket.close()
                 self.log_warning(f"Authentication failed from {address}")
                 return
             
-            # Identifikasi tipe client
-            client_type = request.get('client_type', 'customer')
+            # Update user_id with authenticated one
+            user_id = auth_user_id
             
-            # Log ke database - UPDATE client_type yang benar
+            # Update database dengan client_type yang benar
             if DB_ENABLED:
                 try:
                     database.add_client_connection(client_type, str(address))
                 except Exception as db_err:
                     self.log_warning(f"Database update warning: {db_err}")
             
+            # Tambahkan session_id ke response
+            request['session_id'] = session_id
+            
             if client_type == 'admin':
-                self.handle_admin(client_socket, request, address)
+                self.handle_admin(client_socket, request, address, user_id, session_id)
             elif client_type == 'customer':
-                self.handle_customer(client_socket, request, address)
+                self.handle_customer(client_socket, request, address, user_id, session_id)
             else:
                 response = {'status': 'error', 'message': 'Unknown client type'}
                 client_socket.send(json.dumps(response).encode('utf-8'))
@@ -404,15 +562,21 @@ class TradingSignalServer:
                 except:
                     pass
     
-    def handle_admin(self, client_socket, request, address):
-        """Handle admin client"""
+    def handle_admin(self, client_socket, request, address, admin_id, session_id):
+        """Handle admin client with API Key authentication"""
         try:
-            if request.get('action') == 'send_signal':
+            action = request.get('action')
+            
+            # Include session_id in all responses
+            base_response = {'session_id': session_id}
+            
+            if action == 'send_signal':
                 # Validasi data signal dengan TP
                 required_fields = ['symbol', 'price', 'sl', 'tp', 'type']
                 for field in required_fields:
                     if field not in request:
                         response = {'status': 'error', 'message': f'Missing field: {field}'}
+                        response.update(base_response)
                         client_socket.send(json.dumps(response).encode('utf-8'))
                         return
                 
@@ -420,6 +584,7 @@ class TradingSignalServer:
                 signal_type = request['type'].lower()
                 if signal_type not in ['buy', 'sell']:
                     response = {'status': 'error', 'message': 'Type must be "buy" or "sell"'}
+                    response.update(base_response)
                     client_socket.send(json.dumps(response).encode('utf-8'))
                     return
                 
@@ -430,25 +595,30 @@ class TradingSignalServer:
                     tp = float(request['tp'])
                 except ValueError:
                     response = {'status': 'error', 'message': 'Price, SL, and TP must be numbers'}
+                    response.update(base_response)
                     client_socket.send(json.dumps(response).encode('utf-8'))
                     return
                 
                 if signal_type == 'buy':
                     if tp <= price:
                         response = {'status': 'error', 'message': 'TP must be greater than entry price for BUY'}
+                        response.update(base_response)
                         client_socket.send(json.dumps(response).encode('utf-8'))
                         return
                     if sl >= price:
                         response = {'status': 'error', 'message': 'SL must be less than entry price for BUY'}
+                        response.update(base_response)
                         client_socket.send(json.dumps(response).encode('utf-8'))
                         return
                 else:  # sell
                     if tp >= price:
                         response = {'status': 'error', 'message': 'TP must be less than entry price for SELL'}
+                        response.update(base_response)
                         client_socket.send(json.dumps(response).encode('utf-8'))
                         return
                     if sl <= price:
                         response = {'status': 'error', 'message': 'SL must be greater than entry price for SELL'}
+                        response.update(base_response)
                         client_socket.send(json.dumps(response).encode('utf-8'))
                         return
                 
@@ -464,6 +634,7 @@ class TradingSignalServer:
                                 tp=tp,
                                 signal_type=signal_type,
                                 admin_address=str(address),
+                                admin_id=admin_id,
                                 expiry_minutes=self.expiry_minutes
                             )
                             
@@ -488,7 +659,8 @@ class TradingSignalServer:
                         'type': signal_type,
                         'timestamp': datetime.now().isoformat(),
                         'created_at': time.time(),
-                        'admin_address': str(address)
+                        'admin_address': str(address),
+                        'admin_id': admin_id
                     }
                     
                     # Tambahkan ke active signals
@@ -500,7 +672,11 @@ class TradingSignalServer:
                         removed = self.active_signals.pop(0)
                         self.log_info(f"🧹 Removed old signal: {removed['signal_id']}")
                     
-                    self.log_info(f"📡 New Signal #{signal_id} received from admin {address}")
+                    # Log admin activity
+                    self.log_admin_activity(admin_id, "send_signal", 
+                                           f"{new_signal['symbol']} {new_signal['type']} at {new_signal['price']}")
+                    
+                    self.log_info(f"📡 New Signal #{signal_id} from admin {admin_id}")
                     self.log_info(f"   Symbol: {new_signal['symbol']} {new_signal['type']}")
                     self.log_info(f"   Price: {new_signal['price']}, SL: {new_signal['sl']}, TP: {new_signal['tp']}")
                     self.log_info(f"   Active signals: {len(self.active_signals)}")
@@ -517,66 +693,109 @@ class TradingSignalServer:
                             'tp': new_signal['tp'],
                             'timestamp': new_signal['timestamp']
                         },
-                        'total_active_signals': len(self.active_signals)
+                        'total_active_signals': len(self.active_signals),
+                        'admin_id': admin_id
                     }
+                    response.update(base_response)
                     
                     client_socket.send(json.dumps(response).encode('utf-8'))
             
-            elif request.get('action') == 'get_history':
+            elif action == 'get_history':
                 # Kirim history dari database
+                limit = request.get('limit', 50)
+                
                 if DB_ENABLED:
                     try:
-                        history = database.get_signal_history(limit=50)
+                        history = database.get_signal_history(limit=limit)
                         response = {
                             'status': 'success',
-                            'history': history
+                            'history': history,
+                            'admin_id': admin_id
                         }
+                        response.update(base_response)
                     except Exception as db_err:
                         response = {
                             'status': 'error',
-                            'message': f'Database error: {db_err}'
+                            'message': f'Database error: {db_err}',
+                            'admin_id': admin_id
                         }
+                        response.update(base_response)
                 else:
                     response = {
                         'status': 'error',
-                        'message': 'Database not available'
+                        'message': 'Database not available',
+                        'admin_id': admin_id
                     }
+                    response.update(base_response)
                 client_socket.send(json.dumps(response).encode('utf-8'))
             
-            elif request.get('action') == 'get_stats':
+            elif action == 'get_stats':
                 # Kirim statistik
                 try:
-                    stats = self.get_system_stats()
+                    stats = self.get_system_stats(admin_id)
                     response = {
                         'status': 'success',
-                        'stats': stats
+                        'stats': stats,
+                        'admin_id': admin_id
                     }
+                    response.update(base_response)
                 except Exception as e:
                     response = {
                         'status': 'error',
-                        'message': f'Error getting stats: {e}'
+                        'message': f'Error getting stats: {e}',
+                        'admin_id': admin_id
                     }
+                    response.update(base_response)
                 client_socket.send(json.dumps(response).encode('utf-8'))
             
-            elif request.get('action') == 'get_health':
+            elif action == 'get_health':
                 # Health check endpoint
                 health_stats = self.get_health_status()
                 response = {
                     'status': 'success',
-                    'health': health_stats
+                    'health': health_stats,
+                    'admin_id': admin_id
                 }
+                response.update(base_response)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                
+            elif action == 'get_admin_activity':
+                # Get admin activity log
+                limit = request.get('limit', 20)
+                activities = self.admin_activities[-limit:] if self.admin_activities else []
+                response = {
+                    'status': 'success',
+                    'activities': activities,
+                    'admin_id': admin_id,
+                    'total_activities': len(self.admin_activities)
+                }
+                response.update(base_response)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                
+            elif action == 'list_api_keys':
+                # List API keys (admin only)
+                response = {
+                    'status': 'success',
+                    'admin_keys': {k: '***' + v[-4:] for k, v in self.admin_api_keys.items()},
+                    'customer_keys': {k: '***' + v[-4:] for k, v in self.customer_api_keys.items()},
+                    'admin_id': admin_id
+                }
+                response.update(base_response)
                 client_socket.send(json.dumps(response).encode('utf-8'))
                 
             else:
                 response = {'status': 'error', 'message': 'Invalid action'}
+                response.update(base_response)
                 client_socket.send(json.dumps(response).encode('utf-8'))
                 
         except KeyError as e:
             response = {'status': 'error', 'message': f'Field {e} not found'}
+            response.update(base_response)
             client_socket.send(json.dumps(response).encode('utf-8'))
             self.log_error(f"Key error in admin request: {e}")
         except ValueError as e:
             response = {'status': 'error', 'message': f'Invalid value: {e}'}
+            response.update(base_response)
             client_socket.send(json.dumps(response).encode('utf-8'))
             self.log_error(f"Value error in admin request: {e}")
         except Exception as e:
@@ -598,36 +817,41 @@ class TradingSignalServer:
             'uptime_seconds': int(time.time() - self.start_time),
             'memory_mb': round(process.memory_info().rss / 1024 / 1024, 2),
             'cpu_percent': process.cpu_percent(),
-            'rate_limited_customers': len(self.rate_limits),
+            'rate_limited_users': len(self.rate_limits),
+            'active_sessions': len(self.active_sessions),
+            'admin_activities': len(self.admin_activities),
             'timestamp': datetime.now().isoformat()
         }
     
-    def handle_customer(self, client_socket, request, address):
-        """Handle customer client - Customer dapat SETIAP active signal SEKALI"""
+    def handle_customer(self, client_socket, request, address, customer_id, session_id):
+        """Handle customer client"""
         try:
             action = request.get('action', 'check_signal')
-            customer_id = request.get('customer_id', f"CUST_{address[0]}_{address[1]}")
+            
+            # Include session_id in responses
+            base_response = {'session_id': session_id, 'customer_id': customer_id}
             
             if action == 'check_signal':
-                self._handle_customer_check_signal(client_socket, customer_id, address)
+                self._handle_customer_check_signal(client_socket, customer_id, address, session_id)
             elif action == 'get_all_signals':
-                self._handle_customer_get_all_signals(client_socket, customer_id)
+                self._handle_customer_get_all_signals(client_socket, customer_id, session_id)
             else:
-                self._handle_customer_check_signal(client_socket, customer_id, address)
+                self._handle_customer_check_signal(client_socket, customer_id, address, session_id)
                 
         except Exception as e:
             self.log_error(f"Error in handle_customer: {e}")
             traceback.print_exc()
             error_response = {
                 'status': 'error',
-                'message': f'Server error: {str(e)}'
+                'message': f'Server error: {str(e)}',
+                'customer_id': customer_id
             }
             try:
                 client_socket.send(json.dumps(error_response).encode('utf-8'))
             except:
                 pass
     
-    def _handle_customer_check_signal(self, client_socket, customer_id, address):
+    def _handle_customer_check_signal(self, client_socket, customer_id, address, session_id):
         """Handle customer checking for NEW signals"""
         try:
             new_signals_for_customer = []
@@ -683,7 +907,7 @@ class TradingSignalServer:
                     self.log_info(f"🎯 Customer {customer_id} got {len(new_signals_for_customer)} NEW signals")
                     self.log_info(f"   Total received by this customer: {len(received_signal_ids)}")
             
-            # Kirim response
+            # Kirim response dengan session_id
             if new_signals_for_customer:
                 response = {
                     'status': 'success',
@@ -692,7 +916,8 @@ class TradingSignalServer:
                     'signals': new_signals_for_customer,
                     'customer_id': customer_id,
                     'total_active_signals': len(self.active_signals),
-                    'server_time': datetime.now().isoformat()
+                    'server_time': datetime.now().isoformat(),
+                    'session_id': session_id
                 }
             else:
                 response = {
@@ -702,7 +927,8 @@ class TradingSignalServer:
                     'customer_id': customer_id,
                     'total_active_signals': len(self.active_signals),
                     'total_received_signals': len(self.customer_received_signals.get(customer_id, set())),
-                    'server_time': datetime.now().isoformat()
+                    'server_time': datetime.now().isoformat(),
+                    'session_id': session_id
                 }
             
             client_socket.send(json.dumps(response).encode('utf-8'))
@@ -712,15 +938,17 @@ class TradingSignalServer:
             traceback.print_exc()
             error_response = {
                 'status': 'error',
-                'message': f'Server processing error: {str(e)}'
+                'message': f'Server processing error: {str(e)}',
+                'customer_id': customer_id,
+                'session_id': session_id
             }
             try:
                 client_socket.send(json.dumps(error_response).encode('utf-8'))
             except:
                 pass
     
-    def _handle_customer_get_all_signals(self, client_socket, customer_id):
-        """Handle customer getting all active signals (including already received)"""
+    def _handle_customer_get_all_signals(self, client_socket, customer_id, session_id):
+        """Handle customer getting all active signals"""
         try:
             with self.signal_lock:
                 # Filter expired signals
@@ -751,7 +979,8 @@ class TradingSignalServer:
                 'active_signals_count': len(non_expired_signals),
                 'signals': non_expired_signals,
                 'customer_id': customer_id,
-                'server_time': datetime.now().isoformat()
+                'server_time': datetime.now().isoformat(),
+                'session_id': session_id
             }
             
             client_socket.send(json.dumps(response).encode('utf-8'))
@@ -760,14 +989,16 @@ class TradingSignalServer:
             self.log_error(f"Error in _handle_customer_get_all_signals: {e}")
             error_response = {
                 'status': 'error',
-                'message': f'Server error: {str(e)}'
+                'message': f'Server error: {str(e)}',
+                'customer_id': customer_id,
+                'session_id': session_id
             }
             try:
                 client_socket.send(json.dumps(error_response).encode('utf-8'))
             except:
                 pass
     
-    def get_system_stats(self):
+    def get_system_stats(self, admin_id=None):
         """Get system statistics"""
         try:
             with self.signal_lock:
@@ -781,7 +1012,9 @@ class TradingSignalServer:
                     'signal_expiry_minutes': self.expiry_minutes,
                     'active_connections': self.active_connections,
                     'max_connections': self.max_connections,
-                    'rate_limited_customers': len(self.rate_limits)
+                    'rate_limited_users': len(self.rate_limits),
+                    'active_sessions': len(self.active_sessions),
+                    'admin_activities_count': len(self.admin_activities)
                 }
                 
                 # Hitung total deliveries
@@ -801,8 +1034,19 @@ class TradingSignalServer:
                             'symbol': signal['symbol'],
                             'type': signal['type'],
                             'age_seconds': int(signal_age),
-                            'expires_in': int((self.expiry_minutes * 60) - signal_age)
+                            'expires_in': int((self.expiry_minutes * 60) - signal_age),
+                            'admin_id': signal.get('admin_id', 'unknown')
                         })
+                
+                # Tambahkan admin-specific stats jika admin request
+                if admin_id:
+                    # Count signals sent by this admin
+                    admin_signals = [s for s in self.active_signals if s.get('admin_id') == admin_id]
+                    stats['your_signals_active'] = len(admin_signals)
+                    
+                    # Recent admin activities
+                    admin_activities = [a for a in self.admin_activities if a.get('admin_id') == admin_id]
+                    stats['your_recent_activities'] = admin_activities[-5:] if admin_activities else []
                 
                 # Tambahkan stats dari database jika ada
                 if DB_ENABLED:
@@ -895,9 +1139,12 @@ class TradingSignalServer:
                     # Log connection stats
                     self.log_info(f"🔗 Connection Stats: {self.active_connections}/{self.max_connections} active")
                     
-                    # Log rate limiting stats
-                    if self.rate_limits:
-                        self.log_info(f"⚡ Rate Limits: {len(self.rate_limits)} customers being tracked")
+                    # Log session stats
+                    self.log_info(f"🔐 Session Stats: {len(self.active_sessions)} active sessions")
+                    
+                    # Log admin stats
+                    if self.admin_activities:
+                        self.log_info(f"🛠️  Admin Activities: {len(self.admin_activities)} total")
                             
             except Exception as e:
                 self.log_error(f"Error in periodic stats: {e}")
@@ -922,22 +1169,23 @@ def signal_handler(sig, frame):
 
 def main():
     """Main function"""
-    # === PERBAIKAN: Dapatkan port dari environment ===
     port = int(os.environ.get('PORT', 9999))
     
     print("=" * 60)
-    print("        TRADING SIGNAL SERVER v3.0 - MULTI-SIGNAL")
-    print("                  WITH API KEY SECURITY")
+    print("        TRADING SIGNAL SERVER v4.0")
+    print("          API KEY AUTHENTICATION")
     print("=" * 60)
-    print("🔔 FEATURE: Each customer gets EACH active signal ONCE")
-    print("🔒 SECURITY: API Key authentication + Rate limiting")
+    print("🔔 FEATURES:")
+    print("  • API Key Authentication for ALL users")
+    print("  • Session Management")
+    print("  • Admin Activity Logging")
+    print("  • Rate Limiting (Admins: 120/min, Customers: 60/min)")
     print("=" * 60)
     print(f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"🐍 Python: {sys.version}")
     print(f"🌐 Port: {port}")
     print(f"📊 Database: {'Enabled' if DB_ENABLED else 'Disabled (fallback mode)'}")
-    print(f"👥 Max Connections: 100")
-    print(f"⚡ Rate Limit: 60 requests/minute")
+    print(f"🔒 Security: API Keys Required")
     print("=" * 60)
     print()
     

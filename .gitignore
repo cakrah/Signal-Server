@@ -1,26 +1,53 @@
-# Python 
-__pycache__/ 
-*.py[cod] 
-*$py.class 
-*.so 
-.Python 
-env/ 
-venv/ 
- 
-# Logs 
-logs/ 
-*.log 
- 
-# Database 
-*.db 
-*.sqlite3 
- 
-# Environment variables 
-.env 
-.env.local 
- 
-# IDE 
-.vscode/ 
-.idea/ 
-*.swp 
-*.swo 
+# .gitignore lengkap untuk trading signal app
+# ==========================================
+
+# Konfigurasi
+customer_config.json
+admin_config.json
+*.config.json
+
+# History files
+signals_history_*.json
+*signals_export_*.csv
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# API Keys (SANGAT PENTING!)
+api_keys.json
+*.key
+*.pem
+
+# Environment variables
+.env
+.env.*
+.env.local
+
+# Log files
+*.log
+logs/
+server.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# System files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
