@@ -6,9 +6,42 @@ import os
 import time
 import traceback
 
+# ========== PERBAIKAN UNTUK CLOUD ==========
+def get_database_path(default='signals.db'):
+    """Get database path with fallback for different environments"""
+    # 1. Cek environment variable
+    env_path = os.environ.get('DB_PATH')
+    if env_path:
+        return env_path
+    
+    # 2. Untuk cloud environments
+    if os.environ.get('RENDER') or os.environ.get('GAE_ENV') or os.environ.get('CLOUD_RUN'):
+        return '/tmp/signals.db'
+    
+    # 3. Untuk Google Cloud Platform
+    if os.environ.get('GOOGLE_CLOUD_PROJECT'):
+        return '/tmp/signals.db'
+    
+    # 4. Default local
+    return default
+# ===========================================
+
 class SignalDatabase:
-    def __init__(self, db_file='signals.db'):
-        self.db_file = db_file
+    def __init__(self, db_file=None):
+        # GUNAKAN FUNCTION BARU INI
+        if db_file is None:
+            self.db_file = get_database_path()
+        else:
+            self.db_file = db_file
+        
+        print(f"📊 Database path: {self.db_file}")
+        
+        # Pastikan folder untuk database ada
+        db_dir = os.path.dirname(self.db_file)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+            print(f"📁 Created database directory: {db_dir}")
+        
         self.global_lock = Lock()
         self.connection_lock = Lock()
         self.init_database()
