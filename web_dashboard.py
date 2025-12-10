@@ -1067,28 +1067,38 @@ def api_recent_signals():
     return jsonify({'signals': []})
 
 def background_updater():
-    """Background thread untuk update data"""
+    """Background thread untuk update data - CLOUD OPTIMIZED"""
+    print("🔄 Background updater started...")
     while True:
         try:
             # Update dashboard data periodically
-            time.sleep(5)
-        except:
-            pass
+            time.sleep(10)  # Lebih lama untuk mengurangi load di cloud
+        except KeyboardInterrupt:
+            break
+        except Exception as e:
+            print(f"⚠️ Background updater error: {e}")
+            time.sleep(30)  # Tunggu lebih lama jika error
 
 if __name__ == '__main__':
     # Start background thread
     updater_thread = threading.Thread(target=background_updater, daemon=True)
     updater_thread.start()
     
+    # === PERBAIKAN UNTUK CLOUD DEPLOYMENT ===
+    # Gunakan environment variable untuk port dan host
+    port = int(os.environ.get('DASHBOARD_PORT', 5000))
+    host = os.environ.get('DASHBOARD_HOST', '0.0.0.0')
+    
     # Jalankan web server
     print("=" * 60)
-    print("🚀 TRADING SIGNAL WEB DASHBOARD (with TP)")
+    print("🚀 TRADING SIGNAL WEB DASHBOARD (with TP) - CLOUD READY")
     print("=" * 60)
     print(f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"🌐 URL: http://localhost:5000")
+    print(f"🌐 URL: http://{host}:{port}")
     print(f"📊 Database: {'Enabled ✅' if DB_ENABLED else 'Disabled ⚠️'}")
+    print(f"🔧 Environment: {'CLOUD' if os.environ.get('RENDER') or os.environ.get('GAE_ENV') else 'LOCAL'}")
     print("=" * 60)
-    print("\n📢 Make sure server.py is running on port 9999")
+    print("\n📢 Dashboard running...")
     print("⚡ Press Ctrl+C to stop\n")
     
-    app.run(debug=True, port=5000, use_reloader=False)
+    app.run(debug=False, host=host, port=port, use_reloader=False)

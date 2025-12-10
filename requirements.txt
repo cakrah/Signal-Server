@@ -1,4 +1,1 @@
-# Tidak ada dependensi eksternal yang diperlukan
-# Server menggunakan library standar Python
-
-Flask==2.3.3
+Flask==2.3.3 
