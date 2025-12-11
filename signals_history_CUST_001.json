@@ -1,0 +1,46 @@
+{
+  "customer_id": "CUST_001",
+  "total_signals": 3,
+  "saved_at": "2025-12-11T10:46:39.577046",
+  "signals": [
+    {
+      "signal_id": "SIG_1765424691_0",
+      "symbol": "CAKRA",
+      "price": 200.0,
+      "sl": 11.0,
+      "tp": 2999.0,
+      "type": "buy",
+      "timestamp": "2025-12-11T10:44:51.423776",
+      "admin_id": "ADMIN_001",
+      "age_seconds": 108.1,
+      "expires_in": 191.9,
+      "is_new": true
+    },
+    {
+      "signal_id": "SIG_1765424709_1",
+      "symbol": "CAKRA2",
+      "price": 300.0,
+      "sl": 330.0,
+      "tp": 2.0,
+      "type": "sell",
+      "timestamp": "2025-12-11T10:45:09.566626",
+      "admin_id": "ADMIN_001",
+      "age_seconds": 90.0,
+      "expires_in": 210.0,
+      "is_new": true
+    },
+    {
+      "signal_id": "SIG_1765424769_2",
+      "symbol": "CAKRA4",
+      "price": 400.0,
+      "sl": 445.0,
+      "tp": 22.0,
+      "type": "sell",
+      "timestamp": "2025-12-11T10:46:09.595704",
+      "admin_id": "ADMIN_001",
+      "age_seconds": 29.9,
+      "expires_in": 270.1,
+      "is_new": true
+    }
+  ]
+}

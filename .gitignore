@@ -23,6 +23,8 @@ api_keys_secure.json
 user_status.json
 .env
 .env.*
+signals_history*.json
+*config.json
 
 # Log files
 *.log
