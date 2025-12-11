@@ -1,0 +1,1935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trading Server Admin Panel v2.0</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.8.1/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary-color: #4361ee;
+            --secondary-color: #3a0ca3;
+            --success-color: #4cc9f0;
+            --danger-color: #f72585;
+            --warning-color: #f9c74f;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        /* Login Modal */
+        #loginModal .modal-content {
+            border-radius: 15px;
+            border: none;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        .login-header {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            color: white;
+            border-radius: 15px 15px 0 0;
+            padding: 30px 20px;
+            text-align: center;
+        }
+        
+        .login-body {
+            padding: 30px;
+        }
+        
+        /* Main content styling */
+        .navbar-brand {
+            font-weight: 600;
+            font-size: 1.5rem;
+        }
+        
+        .stats-card {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            transition: transform 0.3s;
+            border: none;
+        }
+        
+        .stats-card:hover {
+            transform: translateY(-5px);
+        }
+        
+        .stats-icon {
+            font-size: 2.5rem;
+            color: var(--primary-color);
+            margin-bottom: 15px;
+        }
+        
+        .stats-number {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #333;
+        }
+        
+        .stats-label {
+            color: #666;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .signals-table, .users-table, .deliveries-table {
+            background: white;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+        
+        .table-header {
+            background: var(--primary-color);
+            color: white;
+            padding: 15px;
+            border-bottom: none;
+        }
+        
+        .table-subheader {
+            background: #f8f9fa;
+            padding: 10px 15px;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        .status-badge {
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        
+        .status-active {
+            background: #d1fae5;
+            color: #065f46;
+        }
+        
+        .status-inactive {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
+        .btn-primary-custom {
+            background: linear-gradient(135deg, var(--primary-color) 0%, var(--secondary-color) 100%);
+            border: none;
+            padding: 10px 25px;
+            border-radius: 10px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        .btn-primary-custom:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(67, 97, 238, 0.3);
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .alert-custom {
+            border-radius: 10px;
+            border: none;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        
+        .signal-buy {
+            color: #10b981;
+            font-weight: 600;
+        }
+        
+        .signal-sell {
+            color: #ef4444;
+            font-weight: 600;
+        }
+        
+        .api-key-display {
+            font-family: 'Courier New', monospace;
+            background: #f8f9fa;
+            padding: 8px 12px;
+            border-radius: 6px;
+            border: 1px solid #dee2e6;
+            font-size: 0.9rem;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .copy-btn {
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .copy-btn:hover {
+            transform: scale(1.1);
+            color: var(--primary-color);
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #6c757d;
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+        
+        /* Logout button */
+        #logoutBtn {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <!-- Login Modal (shown by default) -->
+    <div class="modal fade" id="loginModal" data-bs-backdrop="static" data-bs-keyboard="false" tabindex="-1">
+        <div class="modal-dialog modal-sm">
+            <div class="modal-content">
+                <div class="login-header">
+                    <h4><i class="bi bi-shield-lock"></i> Admin Login</h4>
+                </div>
+                <div class="login-body">
+                    <form id="loginForm">
+                        <div class="mb-3">
+                            <label class="form-label">Admin ID</label>
+                            <input type="text" class="form-control" id="loginAdminId" 
+                                   placeholder="e.g., ADMIN_001" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">API Key</label>
+                            <input type="password" class="form-control" id="loginApiKey" 
+                                   placeholder="Your API Key" required>
+                        </div>
+                        <div class="mb-3 form-check">
+                            <input type="checkbox" class="form-check-input" id="rememberMe">
+                            <label class="form-check-label" for="rememberMe">Remember me</label>
+                        </div>
+                        <button type="button" class="btn btn-primary-custom w-100" onclick="login()">
+                            <i class="bi bi-box-arrow-in-right"></i> Login
+                        </button>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content (hidden until login) -->
+    <div id="mainContent" style="display: none;">
+        <!-- Navigation -->
+        <nav class="navbar navbar-expand-lg navbar-dark" style="background: rgba(0,0,0,0.2);">
+            <div class="container-fluid">
+                <a class="navbar-brand" href="#">
+                    <i class="bi bi-graph-up"></i> Trading Server Admin v2.0
+                </a>
+                <div class="navbar-text text-white">
+                    <span id="currentTime"></span> | 
+                    <span id="serverStatus" class="badge bg-success">Connected</span>
+                    <button class="btn btn-sm btn-outline-light ms-3" id="logoutBtn" onclick="logout()">
+                        <i class="bi bi-box-arrow-right"></i> Logout
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- Main Content -->
+        <div class="container-fluid mt-4">
+            <!-- Stats Row -->
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <div class="stats-card">
+                        <div class="stats-icon">
+                            <i class="bi bi-server"></i>
+                        </div>
+                        <div class="stats-number" id="uptime">--</div>
+                        <div class="stats-label">Uptime</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="stats-card">
+                        <div class="stats-icon">
+                            <i class="bi bi-lightning-charge"></i>
+                        </div>
+                        <div class="stats-number" id="activeSignals">0</div>
+                        <div class="stats-label">Active Signals</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="stats-card">
+                        <div class="stats-icon">
+                            <i class="bi bi-people"></i>
+                        </div>
+                        <div class="stats-number" id="totalUsers">0</div>
+                        <div class="stats-label">Total Users</div>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <div class="stats-card">
+                        <div class="stats-icon">
+                            <i class="bi bi-wifi"></i>
+                        </div>
+                        <div class="stats-number" id="connections">0</div>
+                        <div class="stats-label">Connections</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tabs Navigation -->
+            <div class="row mb-4">
+                <div class="col-12">
+                    <ul class="nav nav-tabs" id="adminTabs" role="tablist">
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link active" id="users-tab" data-bs-toggle="tab" data-bs-target="#users-panel">
+                                <i class="bi bi-people"></i> User Management
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="deliveries-tab" data-bs-toggle="tab" data-bs-target="#deliveries-panel">
+                                <i class="bi bi-send-check"></i> Signal Deliveries
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="signals-tab" data-bs-toggle="tab" data-bs-target="#signals-panel">
+                                <i class="bi bi-lightning-charge"></i> Trading Signals
+                            </button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                            <button class="nav-link" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs-panel">
+                                <i class="bi bi-list-check"></i> Activity Logs
+                            </button>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Tab Content -->
+            <div class="tab-content" id="adminTabsContent">
+                <!-- USERS MANAGEMENT TAB -->
+                <div class="tab-pane fade show active" id="users-panel" role="tabpanel">
+                    <div class="row">
+                        <div class="col-12">
+                            <div class="users-table">
+                                <div class="table-header d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <h5 class="mb-0"><i class="bi bi-people"></i> User Management</h5>
+                                        <small class="text-white-50">View and manage all users and their API keys</small>
+                                    </div>
+                                    <div class="d-flex gap-2">
+                                        <button class="btn btn-sm btn-light" onclick="refreshUsers()">
+                                            <i class="bi bi-arrow-clockwise"></i> Refresh
+                                        </button>
+                                        <button class="btn btn-sm btn-light" data-bs-toggle="modal" data-bs-target="#addUserModal">
+                                            <i class="bi bi-person-plus"></i> Add User
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <div class="table-subheader">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <span id="userCount">Loading users...</span>
+                                        <div class="input-group" style="max-width: 300px;">
+                                            <input type="text" class="form-control form-control-sm" 
+                                                   id="userSearch" placeholder="Search users...">
+                                            <button class="btn btn-outline-secondary btn-sm" onclick="searchUsers()">
+                                                <i class="bi bi-search"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="p-3">
+                                    <div id="usersLoading" class="loading">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <p class="mt-2">Loading users...</p>
+                                    </div>
+                                    
+                                    <div id="usersContent" style="display: none;">
+                                        <!-- Users will be loaded here -->
+                                    </div>
+                                    
+                                    <div id="noUsers" style="display: none;" class="empty-state">
+                                        <i class="bi bi-people"></i>
+                                        <p class="mt-2">No users found</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SIGNAL DELIVERIES TAB -->
+                <div class="tab-pane fade" id="deliveries-panel" role="tabpanel">
+                    <div class="row">
+                        <div class="col-12">
+                            <div class="deliveries-table">
+                                <div class="table-header d-flex justify-content-between align-items-center">
+                                    <div>
+                                        <h5 class="mb-0"><i class="bi bi-send-check"></i> Signal Delivery History</h5>
+                                        <small class="text-white-50">Track which users received which signals</small>
+                                    </div>
+                                    <button class="btn btn-sm btn-light" onclick="refreshDeliveries()">
+                                        <i class="bi bi-arrow-clockwise"></i> Refresh
+                                    </button>
+                                </div>
+                                
+                                <div class="table-subheader">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <span id="deliveryCount">Loading deliveries...</span>
+                                        <div class="input-group" style="max-width: 300px;">
+                                            <input type="text" class="form-control form-control-sm" 
+                                                   id="deliverySearch" placeholder="Search deliveries...">
+                                            <button class="btn btn-outline-secondary btn-sm" onclick="searchDeliveries()">
+                                                <i class="bi bi-search"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div class="p-3">
+                                    <div id="deliveriesLoading" class="loading">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <p class="mt-2">Loading delivery history...</p>
+                                    </div>
+                                    
+                                    <div id="deliveriesContent" style="display: none;">
+                                        <!-- Filters -->
+                                        <div class="row mb-3">
+                                            <div class="col-md-4">
+                                                <label class="form-label">Customer</label>
+                                                <select class="form-select form-select-sm" id="customerFilter" onchange="filterDeliveries()">
+                                                    <option value="">All Customers</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <label class="form-label">Signal Type</label>
+                                                <select class="form-select form-select-sm" id="typeFilter" onchange="filterDeliveries()">
+                                                    <option value="">All Types</option>
+                                                    <option value="buy">BUY</option>
+                                                    <option value="sell">SELL</option>
+                                                </select>
+                                            </div>
+                                            <div class="col-md-4">
+                                                <label class="form-label">Time Range</label>
+                                                <select class="form-select form-select-sm" id="timeFilter" onchange="filterDeliveries()">
+                                                    <option value="7" selected>Last 7 days</option>
+                                                    <option value="1">Last 24 hours</option>
+                                                    <option value="30">Last 30 days</option>
+                                                    <option value="all">All time</option>
+                                                </select>
+                                            </div>
+                                        </div>
+                                        
+                                        <!-- Delivery Table -->
+                                        <div class="table-responsive">
+                                            <table class="table table-hover">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Signal ID</th>
+                                                        <th>Symbol</th>
+                                                        <th>Type</th>
+                                                        <th>Price</th>
+                                                        <th>Customer</th>
+                                                        <th>Delivered At</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="deliveriesTableBody">
+                                                    <!-- Deliveries will be inserted here -->
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                        
+                                        <!-- Pagination -->
+                                        <nav aria-label="Delivery pagination" id="deliveryPaginationContainer" style="display: none;">
+                                            <ul class="pagination pagination-sm justify-content-center" id="deliveryPagination">
+                                            </ul>
+                                        </nav>
+                                    </div>
+                                    
+                                    <div id="noDeliveries" style="display: none;" class="empty-state">
+                                        <i class="bi bi-send"></i>
+                                        <p class="mt-2">No signal deliveries found</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- TRADING SIGNALS TAB -->
+                <div class="tab-pane fade" id="signals-panel" role="tabpanel">
+                    <div class="row">
+                        <div class="col-md-6 mb-4">
+                            <div class="signals-table">
+                                <div class="table-header d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0"><i class="bi bi-lightning-charge"></i> Active Signals</h5>
+                                    <div>
+                                        <button class="btn btn-sm btn-light me-2" onclick="refreshSignals()">
+                                            <i class="bi bi-arrow-clockwise"></i>
+                                        </button>
+                                        <button class="btn btn-sm btn-light" data-bs-toggle="modal" data-bs-target="#sendSignalModal">
+                                            <i class="bi bi-plus-circle"></i> New Signal
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="p-3">
+                                    <div id="signalsLoading" class="loading">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <p class="mt-2">Loading signals...</p>
+                                    </div>
+                                    <div id="signalsContent" style="display: none;">
+                                        <div class="table-responsive">
+                                            <table class="table table-hover">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Symbol</th>
+                                                        <th>Type</th>
+                                                        <th>Price</th>
+                                                        <th>SL/TP</th>
+                                                        <th>Age</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="signalsTableBody">
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                    <div id="noSignals" style="display: none;" class="empty-state">
+                                        <i class="bi bi-inbox"></i>
+                                        <p class="mt-2">No active signals</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-6 mb-4">
+                            <div class="signals-table">
+                                <div class="table-header">
+                                    <h5 class="mb-0"><i class="bi bi-clock-history"></i> Recent Signal History</h5>
+                                </div>
+                                <div class="p-3">
+                                    <div id="signalHistoryLoading" class="loading">
+                                        <div class="spinner-border text-primary" role="status">
+                                            <span class="visually-hidden">Loading...</span>
+                                        </div>
+                                        <p class="mt-2">Loading signal history...</p>
+                                    </div>
+                                    <div id="signalHistoryContent" style="display: none;">
+                                        <div class="table-responsive">
+                                            <table class="table table-hover">
+                                                <thead>
+                                                    <tr>
+                                                        <th>Time</th>
+                                                        <th>Symbol</th>
+                                                        <th>Type</th>
+                                                        <th>Price</th>
+                                                        <th>Customers</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody id="signalHistoryTableBody">
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ACTIVITY LOGS TAB -->
+                <div class="tab-pane fade" id="logs-panel" role="tabpanel">
+                    <div class="row">
+                        <div class="col-12">
+                            <div class="signals-table">
+                                <div class="table-header d-flex justify-content-between align-items-center">
+                                    <h5 class="mb-0"><i class="bi bi-list-check"></i> Activity Logs</h5>
+                                    <button class="btn btn-sm btn-light" onclick="clearLogs()">
+                                        <i class="bi bi-trash"></i> Clear
+                                    </button>
+                                </div>
+                                <div class="p-3">
+                                    <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                                        <table class="table table-sm">
+                                            <thead>
+                                                <tr>
+                                                    <th>Time</th>
+                                                    <th>Admin</th>
+                                                    <th>Action</th>
+                                                    <th>Details</th>
+                                                    <th>IP</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody id="logsTableBody">
+                                                <tr id="logsLoading">
+                                                    <td colspan="5" class="text-center py-4">
+                                                        <div class="spinner-border spinner-border-sm" role="status"></div>
+                                                        <span class="ms-2">Loading activity logs...</span>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div id="noLogs" style="display: none;" class="empty-state">
+                                        <i class="bi bi-list-check"></i>
+                                        <p class="mt-2">No activity logs found</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- MODALS -->
+        <!-- Add User Modal -->
+        <div class="modal fade" id="addUserModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-person-plus"></i> Add New User</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="addUserForm">
+                            <div class="mb-3">
+                                <label class="form-label">User Type *</label>
+                                <select class="form-select" id="userType" required>
+                                    <option value="">Select type...</option>
+                                    <option value="admins">Admin</option>
+                                    <option value="customers">Customer</option>
+                                </select>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">User ID *</label>
+                                <input type="text" class="form-control" id="userId" required
+                                       placeholder="e.g., ADMIN_001 or CUST_001">
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">API Key</label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control" id="apiKey" 
+                                           placeholder="Leave empty to auto-generate">
+                                    <button type="button" class="btn btn-outline-secondary" onclick="generateApiKeyField()">
+                                        <i class="bi bi-key"></i> Generate
+                                    </button>
+                                </div>
+                                <div class="form-text">
+                                    If empty, a secure API key will be generated automatically
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary-custom" onclick="submitAddUser()">Add User</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Edit User Modal -->
+        <div class="modal fade" id="editUserModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-pencil-square"></i> Edit User</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="editUserForm">
+                            <input type="hidden" id="editUserType">
+                            <input type="hidden" id="editUserId">
+                            
+                            <div class="mb-3">
+                                <label class="form-label">User ID</label>
+                                <input type="text" class="form-control" id="editUserIdDisplay" disabled>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">User Type</label>
+                                <input type="text" class="form-control" id="editUserTypeDisplay" disabled>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Current API Key</label>
+                                <div class="input-group">
+                                    <input type="text" class="form-control api-key-display" id="editApiKey" readonly>
+                                    <button type="button" class="btn btn-outline-secondary copy-btn" 
+                                            onclick="copyToClipboard('editApiKey')">
+                                        <i class="bi bi-clipboard"></i>
+                                    </button>
+                                </div>
+                                <div class="form-text">
+                                    Click the copy button to copy API key to clipboard
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Regenerate API Key</label>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="regenerateApiKey">
+                                    <label class="form-check-label" for="regenerateApiKey">
+                                        Generate new API key for this user
+                                    </label>
+                                </div>
+                                <div class="form-text text-warning">
+                                    Warning: Regenerating will invalidate the current API key
+                                </div>
+                            </div>
+                            
+                            <div class="mb-3">
+                                <label class="form-label">Status *</label>
+                                <select class="form-select" id="editUserStatus" required>
+                                    <option value="active">Active</option>
+                                    <option value="inactive">Inactive</option>
+                                </select>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary-custom" onclick="submitEditUser()">Save Changes</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Send Signal Modal -->
+        <div class="modal fade" id="sendSignalModal" tabindex="-1">
+            <div class="modal-dialog">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-lightning-charge"></i> Send New Signal</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <form id="sendSignalForm">
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Symbol *</label>
+                                    <input type="text" class="form-control" id="symbol" required
+                                           placeholder="e.g., EURUSD">
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Type *</label>
+                                    <select class="form-select" id="signalType" required>
+                                        <option value="buy">BUY</option>
+                                        <option value="sell">SELL</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label class="form-label">Entry Price *</label>
+                                <input type="number" step="0.00001" class="form-control" id="price" required>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Stop Loss (SL) *</label>
+                                    <input type="number" step="0.00001" class="form-control" id="sl" required>
+                                </div>
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">Take Profit (TP) *</label>
+                                    <input type="number" step="0.00001" class="form-control" id="tp" required>
+                                </div>
+                            </div>
+                            <div class="form-text">
+                                * Required fields
+                            </div>
+                        </form>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary-custom" onclick="submitSendSignal()">Send Signal</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toasts for notifications -->
+        <div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+            <div id="liveToast" class="toast" role="alert">
+                <div class="toast-header">
+                    <strong class="me-auto" id="toastTitle">Notification</strong>
+                    <small id="toastTime">just now</small>
+                    <button type="button" class="btn-close" data-bs-dismiss="toast"></button>
+                </div>
+                <div class="toast-body" id="toastMessage">
+                    Hello, world! This is a toast message.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // Configuration - IDEAL untuk production
+        // Bisa di-set via environment variable atau config file
+        const API_BASE_URL = window.location.origin.includes('localhost') 
+            ? 'http://localhost:5000' 
+            : window.location.origin.replace(/:\d+$/, ':5000');
+        
+        const API_ADMIN_BASE = `${API_BASE_URL}/api/admin`;
+        
+        // Authentication state
+        let authState = {
+            adminId: null,
+            apiKey: null,
+            loggedIn: false
+        };
+        
+        // State variables
+        let refreshIntervals = {};
+        let currentDeliveryPage = 1;
+        const deliveriesPerPage = 20;
+        
+        // Initialize on DOM load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Check for saved credentials
+            const savedAdminId = localStorage.getItem('admin_id');
+            const savedApiKey = localStorage.getItem('admin_api_key');
+            
+            if (savedAdminId && savedApiKey) {
+                document.getElementById('loginAdminId').value = savedAdminId;
+                document.getElementById('loginApiKey').value = savedApiKey;
+                document.getElementById('rememberMe').checked = true;
+            }
+            
+            // Show login modal
+            const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
+            loginModal.show();
+            
+            // Initialize time display
+            updateTime();
+            setInterval(updateTime, 1000);
+            
+            // Setup event listeners
+            setupEventListeners();
+        });
+        
+        function setupEventListeners() {
+            // Login form submit on Enter
+            document.getElementById('loginApiKey').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') login();
+            });
+            
+            // Search functionality
+            document.getElementById('userSearch').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') searchUsers();
+            });
+            
+            document.getElementById('deliverySearch').addEventListener('keypress', function(e) {
+                if (e.key === 'Enter') searchDeliveries();
+            });
+        }
+        
+        // ========== AUTHENTICATION FUNCTIONS ==========
+        
+        async function login() {
+            const adminId = document.getElementById('loginAdminId').value.trim();
+            const apiKey = document.getElementById('loginApiKey').value.trim();
+            const rememberMe = document.getElementById('rememberMe').checked;
+            
+            if (!adminId || !apiKey) {
+                showToast('Error', 'Please enter Admin ID and API Key', 'error');
+                return;
+            }
+            
+            showToast('Info', 'Logging in...', 'info');
+            
+            try {
+                // Test authentication by making a health check request
+                const response = await fetch(`${API_ADMIN_BASE}/health`, {
+                    method: 'GET',
+                    headers: {
+                        'X-Admin-ID': adminId,
+                        'X-API-Key': apiKey,
+                        'Content-Type': 'application/json'
+                    }
+                });
+                
+                if (response.status === 401) {
+                    showToast('Error', 'Invalid Admin ID or API Key', 'error');
+                    return;
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 'healthy') {
+                    // Save credentials
+                    authState = {
+                        adminId: adminId,
+                        apiKey: apiKey,
+                        loggedIn: true
+                    };
+                    
+                    if (rememberMe) {
+                        localStorage.setItem('admin_id', adminId);
+                        localStorage.setItem('admin_api_key', apiKey);
+                    } else {
+                        localStorage.removeItem('admin_id');
+                        localStorage.removeItem('admin_api_key');
+                    }
+                    
+                    // Hide login modal
+                    bootstrap.Modal.getInstance(document.getElementById('loginModal')).hide();
+                    
+                    // Show main content
+                    document.getElementById('mainContent').style.display = 'block';
+                    document.getElementById('logoutBtn').style.display = 'inline-block';
+                    
+                    showToast('Success', `Logged in as ${adminId}`, 'success');
+                    
+                    // Load initial data
+                    initializeDashboard();
+                    
+                } else {
+                    showToast('Error', 'Authentication failed', 'error');
+                }
+                
+            } catch (error) {
+                console.error('Login error:', error);
+                showToast('Error', `Connection error: ${error.message}`, 'error');
+            }
+        }
+        
+        function logout() {
+            if (confirm('Are you sure you want to logout?')) {
+                authState = { adminId: null, apiKey: null, loggedIn: false };
+                localStorage.removeItem('admin_id');
+                localStorage.removeItem('admin_api_key');
+                
+                // Stop all intervals
+                Object.values(refreshIntervals).forEach(interval => clearInterval(interval));
+                refreshIntervals = {};
+                
+                // Hide main content
+                document.getElementById('mainContent').style.display = 'none';
+                
+                // Reset forms
+                document.getElementById('loginForm').reset();
+                
+                // Show login modal
+                const loginModal = new bootstrap.Modal(document.getElementById('loginModal'));
+                loginModal.show();
+                
+                showToast('Info', 'Logged out successfully', 'info');
+            }
+        }
+        
+        function initializeDashboard() {
+            // Load initial data
+            loadStats();
+            loadUsers();
+            loadDeliveries();
+            loadSignals();
+            loadSignalHistory();
+            loadActivityLogs();
+            
+            // Set up auto-refresh intervals
+            refreshIntervals.stats = setInterval(loadStats, 10000); // Every 10 seconds
+            refreshIntervals.signals = setInterval(loadSignals, 15000); // Every 15 seconds
+            refreshIntervals.users = setInterval(loadUsers, 30000); // Every 30 seconds
+            refreshIntervals.deliveries = setInterval(loadDeliveries, 20000); // Every 20 seconds
+            refreshIntervals.logs = setInterval(loadActivityLogs, 60000); // Every minute
+        }
+        
+        // ========== API CALL FUNCTIONS ==========
+        
+        async function apiCall(endpoint, options = {}) {
+            if (!authState.loggedIn) {
+                showToast('Error', 'Please login first', 'error');
+                throw new Error('Not authenticated');
+            }
+            
+            const defaultHeaders = {
+                'X-Admin-ID': authState.adminId,
+                'X-API-Key': authState.apiKey,
+                'Content-Type': 'application/json'
+            };
+            
+            const config = {
+                ...options,
+                headers: { ...defaultHeaders, ...options.headers }
+            };
+            
+            try {
+                const response = await fetch(`${API_ADMIN_BASE}${endpoint}`, config);
+                
+                if (response.status === 401) {
+                    showToast('Error', 'Session expired. Please login again.', 'error');
+                    logout();
+                    return null;
+                }
+                
+                if (response.status === 429) {
+                    showToast('Warning', 'Rate limit exceeded. Please slow down.', 'warning');
+                    return null;
+                }
+                
+                const data = await response.json();
+                return data;
+                
+            } catch (error) {
+                console.error(`API call error to ${endpoint}:`, error);
+                showToast('Error', `API error: ${error.message}`, 'error');
+                return null;
+            }
+        }
+        
+        // ========== USER MANAGEMENT FUNCTIONS ==========
+        
+        async function loadUsers() {
+            try {
+                showLoading('users');
+                
+                const data = await apiCall('/users');
+                if (!data) return;
+                
+                hideLoading('users');
+                
+                if (data.status === 'success' && data.users) {
+                    document.getElementById('usersContent').style.display = 'block';
+                    document.getElementById('noUsers').style.display = 'none';
+                    
+                    renderUsers(data.users);
+                    
+                    // Update user count
+                    const totalUsers = Object.keys(data.users.admins || {}).length + 
+                                     Object.keys(data.users.customers || {}).length;
+                    document.getElementById('userCount').textContent = `${totalUsers} users found`;
+                    
+                    // Update customer filter in deliveries tab
+                    updateCustomerFilter(data.users.customers || {});
+                    
+                } else {
+                    document.getElementById('usersContent').style.display = 'none';
+                    document.getElementById('noUsers').style.display = 'block';
+                    document.getElementById('userCount').textContent = 'No users found';
+                }
+                
+            } catch (error) {
+                console.error('Error loading users:', error);
+                hideLoading('users');
+                document.getElementById('noUsers').style.display = 'block';
+            }
+        }
+        
+        function renderUsers(usersData) {
+            const container = document.getElementById('usersContent');
+            
+            let html = `
+                <div class="mb-4">
+                    <h6 class="mb-3"><i class="bi bi-shield-check"></i> Admin Users</h6>
+                    ${renderUserTable('admins', usersData.admins || {})}
+                </div>
+                <div>
+                    <h6 class="mb-3"><i class="bi bi-person"></i> Customer Users</h6>
+                    ${renderUserTable('customers', usersData.customers || {})}
+                </div>
+            `;
+            
+            container.innerHTML = html;
+        }
+        
+        function renderUserTable(userType, users) {
+            if (Object.keys(users).length === 0) {
+                return `
+                    <div class="alert alert-info">
+                        <i class="bi bi-info-circle"></i> No ${userType} found
+                    </div>
+                `;
+            }
+            
+            const isAdmin = userType === 'admins';
+            
+            let rows = '';
+            for (const [userId, userData] of Object.entries(users)) {
+                const statusClass = userData.status === 'active' ? 'status-active' : 'status-inactive';
+                const statusText = userData.status === 'active' ? 'Active' : 'Inactive';
+                const createdDate = userData.created ? new Date(userData.created).toLocaleDateString() : 'N/A';
+                
+                rows += `
+                    <tr>
+                        <td>
+                            <strong>${userId}</strong>
+                            <br><small class="text-muted">Created: ${createdDate}</small>
+                        </td>
+                        <td>
+                            <div class="api-key-display" title="${userData.api_key}">
+                                ${userData.api_key}
+                            </div>
+                            <small class="text-muted copy-btn" onclick="copyToClipboard('${userData.api_key}')" 
+                                   style="cursor: pointer;">
+                                <i class="bi bi-clipboard"></i> Copy
+                            </small>
+                        </td>
+                        <td>
+                            <span class="status-badge ${statusClass}">${statusText}</span>
+                        </td>
+                        ${!isAdmin ? '<td>-</td>' : ''}
+                        <td>
+                            <div class="btn-group btn-group-sm">
+                                <button class="btn btn-outline-primary" 
+                                        onclick="editUser('${userType}', '${userId}', ${JSON.stringify(userData).replace(/'/g, "\\'")})">
+                                    <i class="bi bi-pencil"></i>
+                                </button>
+                                <button class="btn btn-outline-${userData.status === 'active' ? 'warning' : 'success'}" 
+                                        onclick="toggleUserStatus('${userType}', '${userId}', '${userData.status === 'active' ? 'inactive' : 'active'}')">
+                                    <i class="bi bi-power"></i>
+                                </button>
+                                <button class="btn btn-outline-danger" 
+                                        onclick="deleteUser('${userType}', '${userId}')">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }
+            
+            return `
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>User ID</th>
+                                <th>API Key</th>
+                                <th>Status</th>
+                                ${!isAdmin ? '<th>Signals Received</th>' : ''}
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+        }
+        
+        async function submitAddUser() {
+            const userType = document.getElementById('userType').value;
+            const userId = document.getElementById('userId').value.trim();
+            let apiKey = document.getElementById('apiKey').value.trim();
+            
+            if (!userType || !userId) {
+                showToast('Error', 'Please fill in all required fields', 'error');
+                return;
+            }
+            
+            // Generate API key if empty
+            if (!apiKey) {
+                apiKey = generateApiKey(userType);
+            }
+            
+            try {
+                const data = await apiCall('/users', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        user_type: userType,
+                        user_id: userId,
+                        api_key: apiKey
+                    })
+                });
+                
+                if (data && data.status === 'success') {
+                    showToast('Success', `User ${userId} added successfully`, 'success');
+                    
+                    // Show API key to user
+                    showToast('API Key', 
+                            `API Key for ${userId}: <code>${apiKey}</code><br>
+                            <small>Copy this key now - it won't be shown again!</small>`, 
+                            'info', 10000);
+                    
+                    bootstrap.Modal.getInstance(document.getElementById('addUserModal')).hide();
+                    document.getElementById('addUserForm').reset();
+                    loadUsers();
+                    
+                } else if (data) {
+                    showToast('Error', data.message || 'Failed to add user', 'error');
+                }
+                
+            } catch (error) {
+                showToast('Error', 'Failed to add user', 'error');
+            }
+        }
+        
+        function editUser(userType, userId, userData) {
+            document.getElementById('editUserType').value = userType;
+            document.getElementById('editUserId').value = userId;
+            document.getElementById('editUserIdDisplay').value = userId;
+            document.getElementById('editUserTypeDisplay').value = userType === 'admins' ? 'Admin' : 'Customer';
+            document.getElementById('editApiKey').value = userData.api_key;
+            document.getElementById('editUserStatus').value = userData.status;
+            document.getElementById('regenerateApiKey').checked = false;
+            
+            const modal = new bootstrap.Modal(document.getElementById('editUserModal'));
+            modal.show();
+        }
+        
+        async function submitEditUser() {
+            const userType = document.getElementById('editUserType').value;
+            const userId = document.getElementById('editUserId').value;
+            const newStatus = document.getElementById('editUserStatus').value;
+            const regenerateKey = document.getElementById('regenerateApiKey').checked;
+            
+            try {
+                // Update status
+                const statusData = await apiCall(`/users/${userType}/${userId}/status`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ status: newStatus })
+                });
+                
+                if (!statusData || statusData.status !== 'success') {
+                    showToast('Error', 'Failed to update user status', 'error');
+                    return;
+                }
+                
+                // Regenerate API key if requested
+                if (regenerateKey) {
+                    const newApiKey = generateApiKey(userType);
+                    
+                    // Note: This requires an API endpoint to update API key
+                    // For now, we'll inform the user to update manually
+                    showToast('New API Key Required', 
+                            `New API Key for ${userId}:<br>
+                            <code>${newApiKey}</code><br>
+                            <small>Please update this manually in api_keys_secure.json file</small>`, 
+                            'warning', 15000);
+                }
+                
+                showToast('Success', `User ${userId} updated successfully`, 'success');
+                bootstrap.Modal.getInstance(document.getElementById('editUserModal')).hide();
+                loadUsers();
+                
+            } catch (error) {
+                showToast('Error', 'Failed to update user: ' + error.message, 'error');
+            }
+        }
+        
+        async function toggleUserStatus(userType, userId, newStatus) {
+            const action = newStatus === 'active' ? 'activate' : 'deactivate';
+            
+            if (!confirm(`Are you sure you want to ${action} ${userId}?`)) {
+                return;
+            }
+            
+            try {
+                const data = await apiCall(`/users/${userType}/${userId}/status`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ status: newStatus })
+                });
+                
+                if (data && data.status === 'success') {
+                    showToast('Success', `User ${userId} ${action}d successfully`, 'success');
+                    loadUsers();
+                } else if (data) {
+                    showToast('Error', data.message || 'Failed to update status', 'error');
+                }
+                
+            } catch (error) {
+                showToast('Error', 'Failed to update status', 'error');
+            }
+        }
+        
+        async function deleteUser(userType, userId) {
+            if (!confirm(`Are you sure you want to delete ${userId}? This action cannot be undone.`)) {
+                return;
+            }
+            
+            try {
+                const data = await apiCall(`/users/${userType}/${userId}`, {
+                    method: 'DELETE'
+                });
+                
+                if (data && data.status === 'success') {
+                    showToast('Success', `User ${userId} deleted successfully`, 'success');
+                    loadUsers();
+                } else if (data) {
+                    showToast('Error', data.message || 'Failed to delete user', 'error');
+                }
+                
+            } catch (error) {
+                showToast('Error', 'Failed to delete user', 'error');
+            }
+        }
+        
+        // ========== DELIVERY MANAGEMENT FUNCTIONS ==========
+        
+        async function loadDeliveries() {
+            try {
+                showLoading('deliveries');
+                
+                const days = document.getElementById('timeFilter')?.value || '7';
+                const data = await apiCall(`/deliveries?days=${days}`);
+                
+                hideLoading('deliveries');
+                
+                if (data && data.status === 'success' && data.deliveries) {
+                    window.allDeliveries = data.deliveries;
+                    filterDeliveries();
+                    
+                    document.getElementById('deliveriesContent').style.display = 'block';
+                    document.getElementById('noDeliveries').style.display = 'none';
+                    
+                    const total = data.deliveries.length;
+                    document.getElementById('deliveryCount').textContent = `${total} deliveries found`;
+                    
+                } else {
+                    document.getElementById('deliveriesContent').style.display = 'none';
+                    document.getElementById('noDeliveries').style.display = 'block';
+                    document.getElementById('deliveryCount').textContent = 'No deliveries found';
+                }
+                
+            } catch (error) {
+                console.error('Error loading deliveries:', error);
+                hideLoading('deliveries');
+                document.getElementById('noDeliveries').style.display = 'block';
+            }
+        }
+        
+        function filterDeliveries() {
+            const customerFilter = document.getElementById('customerFilter')?.value || '';
+            const typeFilter = document.getElementById('typeFilter')?.value || '';
+            const searchTerm = document.getElementById('deliverySearch')?.value.toLowerCase() || '';
+            
+            const filtered = (window.allDeliveries || []).filter(delivery => {
+                // Customer filter
+                if (customerFilter && delivery.customer_id !== customerFilter) return false;
+                
+                // Type filter
+                if (typeFilter && delivery.type !== typeFilter) return false;
+                
+                // Search filter
+                if (searchTerm) {
+                    const searchable = [
+                        delivery.signal_id,
+                        delivery.symbol,
+                        delivery.customer_id,
+                        delivery.type,
+                        delivery.price?.toString()
+                    ].join(' ').toLowerCase();
+                    
+                    if (!searchable.includes(searchTerm)) return false;
+                }
+                
+                return true;
+            });
+            
+            window.filteredDeliveries = filtered;
+            currentDeliveryPage = 1;
+            renderDeliveries();
+        }
+        
+        function renderDeliveries() {
+            const deliveries = window.filteredDeliveries || [];
+            const tbody = document.getElementById('deliveriesTableBody');
+            
+            if (deliveries.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="6" class="text-center py-4">
+                            <i class="bi bi-info-circle"></i> No deliveries match your filters
+                        </td>
+                    </tr>
+                `;
+                document.getElementById('deliveryPaginationContainer').style.display = 'none';
+                return;
+            }
+            
+            const startIndex = (currentDeliveryPage - 1) * deliveriesPerPage;
+            const endIndex = startIndex + deliveriesPerPage;
+            const pageDeliveries = deliveries.slice(startIndex, endIndex);
+            
+            let rows = '';
+            pageDeliveries.forEach(delivery => {
+                const deliveredTime = new Date(delivery.delivered_at);
+                const timeStr = deliveredTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                const dateStr = deliveredTime.toLocaleDateString();
+                
+                rows += `
+                    <tr>
+                        <td>
+                            <small class="text-muted">${delivery.signal_id || 'N/A'}</small>
+                        </td>
+                        <td>
+                            <strong>${delivery.symbol || 'N/A'}</strong>
+                        </td>
+                        <td>
+                            <span class="${delivery.type === 'buy' ? 'signal-buy' : 'signal-sell'}">
+                                ${delivery.type?.toUpperCase() || 'N/A'}
+                            </span>
+                        </td>
+                        <td>${delivery.price ? delivery.price.toFixed(5) : 'N/A'}</td>
+                        <td>
+                            <span class="badge bg-info">${delivery.customer_id || 'N/A'}</span>
+                        </td>
+                        <td>
+                            <small>${dateStr}<br>${timeStr}</small>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            tbody.innerHTML = rows;
+            updateDeliveryPagination(deliveries.length);
+        }
+        
+        function updateDeliveryPagination(totalItems) {
+            const totalPages = Math.ceil(totalItems / deliveriesPerPage);
+            const container = document.getElementById('deliveryPaginationContainer');
+            const pagination = document.getElementById('deliveryPagination');
+            
+            if (totalPages <= 1) {
+                container.style.display = 'none';
+                return;
+            }
+            
+            container.style.display = 'block';
+            
+            let paginationHtml = `
+                <li class="page-item ${currentDeliveryPage === 1 ? 'disabled' : ''}">
+                    <a class="page-link" href="#" onclick="changeDeliveryPage(${currentDeliveryPage - 1})">
+                        <i class="bi bi-chevron-left"></i>
+                    </a>
+                </li>
+            `;
+            
+            for (let i = 1; i <= totalPages; i++) {
+                paginationHtml += `
+                    <li class="page-item ${i === currentDeliveryPage ? 'active' : ''}">
+                        <a class="page-link" href="#" onclick="changeDeliveryPage(${i})">${i}</a>
+                    </li>
+                `;
+            }
+            
+            paginationHtml += `
+                <li class="page-item ${currentDeliveryPage === totalPages ? 'disabled' : ''}">
+                    <a class="page-link" href="#" onclick="changeDeliveryPage(${currentDeliveryPage + 1})">
+                        <i class="bi bi-chevron-right"></i>
+                    </a>
+                </li>
+            `;
+            
+            pagination.innerHTML = paginationHtml;
+        }
+        
+        function changeDeliveryPage(page) {
+            const totalPages = Math.ceil((window.filteredDeliveries || []).length / deliveriesPerPage);
+            
+            if (page < 1 || page > totalPages) return;
+            
+            currentDeliveryPage = page;
+            renderDeliveries();
+        }
+        
+        function updateCustomerFilter(customers) {
+            const filter = document.getElementById('customerFilter');
+            if (!filter) return;
+            
+            const currentValue = filter.value;
+            filter.innerHTML = '<option value="">All Customers</option>';
+            
+            Object.keys(customers).forEach(customerId => {
+                const option = document.createElement('option');
+                option.value = customerId;
+                option.textContent = customerId;
+                filter.appendChild(option);
+            });
+            
+            filter.value = currentValue;
+        }
+        
+        // ========== SIGNAL MANAGEMENT FUNCTIONS ==========
+        
+        async function loadSignals() {
+            try {
+                showLoading('signals');
+                
+                const data = await apiCall('/signals');
+                
+                hideLoading('signals');
+                
+                if (data && data.status === 'success' && data.signals) {
+                    document.getElementById('signalsContent').style.display = 'block';
+                    document.getElementById('noSignals').style.display = 'none';
+                    
+                    renderSignals(data.signals);
+                    
+                    // Update stats
+                    document.getElementById('activeSignals').textContent = data.signals.length;
+                    
+                } else {
+                    document.getElementById('signalsContent').style.display = 'none';
+                    document.getElementById('noSignals').style.display = 'block';
+                }
+                
+            } catch (error) {
+                console.error('Error loading signals:', error);
+                hideLoading('signals');
+                document.getElementById('noSignals').style.display = 'block';
+            }
+        }
+        
+        function renderSignals(signals) {
+            const tbody = document.getElementById('signalsTableBody');
+            
+            if (!signals || signals.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="text-center py-3">
+                            <i class="bi bi-info-circle"></i> No active signals
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            let rows = '';
+            signals.forEach(signal => {
+                const createdTime = new Date(signal.created_at);
+                const now = new Date();
+                const diffMinutes = Math.floor((now - createdTime) / (1000 * 60));
+                
+                rows += `
+                    <tr>
+                        <td><strong>${signal.symbol}</strong></td>
+                        <td>
+                            <span class="${signal.type === 'buy' ? 'signal-buy' : 'signal-sell'}">
+                                ${signal.type.toUpperCase()}
+                            </span>
+                        </td>
+                        <td>${signal.price.toFixed(5)}</td>
+                        <td>
+                            <small>SL: ${signal.sl.toFixed(5)}<br>TP: ${signal.tp.toFixed(5)}</small>
+                        </td>
+                        <td>
+                            <small>${diffMinutes}m ago</small>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            tbody.innerHTML = rows;
+        }
+        
+        async function loadSignalHistory() {
+            try {
+                showLoading('signalHistory');
+                
+                const data = await apiCall('/signals/detailed?limit=10');
+                
+                hideLoading('signalHistory');
+                
+                if (data && data.status === 'success' && data.signals) {
+                    document.getElementById('signalHistoryContent').style.display = 'block';
+                    renderSignalHistory(data.signals);
+                }
+                
+            } catch (error) {
+                console.error('Error loading signal history:', error);
+                hideLoading('signalHistory');
+            }
+        }
+        
+        function renderSignalHistory(signals) {
+            const tbody = document.getElementById('signalHistoryTableBody');
+            
+            if (!signals || signals.length === 0) {
+                tbody.innerHTML = `
+                    <tr>
+                        <td colspan="5" class="text-center py-3">
+                            <i class="bi bi-info-circle"></i> No signal history
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+            
+            let rows = '';
+            signals.forEach(signal => {
+                const createdTime = new Date(signal.created_at);
+                const timeStr = createdTime.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                
+                rows += `
+                    <tr>
+                        <td>
+                            <small>${timeStr}</small>
+                        </td>
+                        <td>${signal.symbol}</td>
+                        <td>
+                            <span class="${signal.type === 'buy' ? 'signal-buy' : 'signal-sell'}">
+                                ${signal.type.toUpperCase()}
+                            </span>
+                        </td>
+                        <td>${signal.price.toFixed(5)}</td>
+                        <td>
+                            <span class="badge bg-primary">${signal.customer_count || 0}</span>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            tbody.innerHTML = rows;
+        }
+        
+        async function loadActivityLogs() {
+            try {
+                const data = await apiCall('/admin/activities?limit=20');
+                
+                if (data && data.status === 'success' && data.activities) {
+                    renderActivityLogs(data.activities);
+                    document.getElementById('logsLoading').style.display = 'none';
+                } else {
+                    document.getElementById('noLogs').style.display = 'block';
+                    document.getElementById('logsLoading').style.display = 'none';
+                }
+                
+            } catch (error) {
+                console.error('Error loading activity logs:', error);
+                document.getElementById('logsLoading').style.display = 'none';
+            }
+        }
+        
+        function renderActivityLogs(activities) {
+            const tbody = document.getElementById('logsTableBody');
+            
+            if (!activities || activities.length === 0) {
+                tbody.innerHTML = `
+                    <tr id="logsLoading">
+                        <td colspan="5" class="text-center py-4">
+                            <i class="bi bi-info-circle"></i> No activity logs found
+                        </td>
+                    </tr>
+                `;
+                document.getElementById('noLogs').style.display = 'block';
+                return;
+            }
+            
+            document.getElementById('noLogs').style.display = 'none';
+            
+            let rows = '';
+            activities.forEach(log => {
+                const timestamp = new Date(log.timestamp);
+                const timeStr = timestamp.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                const dateStr = timestamp.toLocaleDateString();
+                
+                rows += `
+                    <tr>
+                        <td>
+                            <small>${dateStr}<br>${timeStr}</small>
+                        </td>
+                        <td>
+                            <span class="badge bg-secondary">${log.admin_id}</span>
+                        </td>
+                        <td>
+                            <span class="badge bg-info">${log.action}</span>
+                        </td>
+                        <td>
+                            <small>${log.details || 'N/A'}</small>
+                        </td>
+                        <td>
+                            <small class="text-muted">${log.ip || 'N/A'}</small>
+                        </td>
+                    </tr>
+                `;
+            });
+            
+            // Remove loading row
+            const loadingRow = document.getElementById('logsLoading');
+            if (loadingRow) loadingRow.remove();
+            
+            tbody.innerHTML = rows + (loadingRow ? '' : '');
+        }
+        
+        // ========== STATS FUNCTIONS ==========
+        
+        async function loadStats() {
+            try {
+                const data = await apiCall('/stats');
+                
+                if (data && data.status === 'success') {
+                    const stats = data.stats || {};
+                    
+                    // Update uptime
+                    if (stats.uptime_seconds) {
+                        const hours = Math.floor(stats.uptime_seconds / 3600);
+                        const minutes = Math.floor((stats.uptime_seconds % 3600) / 60);
+                        document.getElementById('uptime').textContent = `${hours}h ${minutes}m`;
+                    }
+                    
+                    // Update other stats
+                    document.getElementById('activeSignals').textContent = stats.active_signals || 0;
+                    document.getElementById('totalUsers').textContent = (stats.total_admins || 0) + (stats.total_customers || 0);
+                    document.getElementById('connections').textContent = stats.active_connections || 0;
+                    
+                    // Update server status
+                    const statusBadge = document.getElementById('serverStatus');
+                    if (stats.server_status === 'running') {
+                        statusBadge.className = 'badge bg-success';
+                        statusBadge.textContent = 'Connected';
+                    } else {
+                        statusBadge.className = 'badge bg-danger';
+                        statusBadge.textContent = 'Disconnected';
+                    }
+                }
+                
+            } catch (error) {
+                console.error('Error loading stats:', error);
+                document.getElementById('serverStatus').className = 'badge bg-danger';
+                document.getElementById('serverStatus').textContent = 'Error';
+            }
+        }
+        
+        // ========== HELPER FUNCTIONS ==========
+        
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('currentTime').textContent = 
+                now.toLocaleTimeString('en-US', { 
+                    hour12: false,
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit'
+                });
+        }
+        
+        function showLoading(section) {
+            const loadingEl = document.getElementById(`${section}Loading`);
+            if (loadingEl) loadingEl.style.display = 'block';
+        }
+        
+        function hideLoading(section) {
+            const loadingEl = document.getElementById(`${section}Loading`);
+            if (loadingEl) loadingEl.style.display = 'none';
+        }
+        
+        function searchUsers() {
+            const searchTerm = document.getElementById('userSearch').value.toLowerCase();
+            const rows = document.querySelectorAll('#usersContent tr');
+            
+            rows.forEach(row => {
+                const text = row.textContent.toLowerCase();
+                row.style.display = text.includes(searchTerm) ? '' : 'none';
+            });
+        }
+        
+        function searchDeliveries() {
+            filterDeliveries();
+        }
+        
+        function copyToClipboard(textOrElementId) {
+            let text;
+            
+            if (textOrElementId.startsWith('editApiKey') || 
+                textOrElementId.startsWith('userApiKey')) {
+                const element = document.getElementById(textOrElementId);
+                text = element ? element.value : textOrElementId;
+            } else {
+                text = textOrElementId;
+            }
+            
+            navigator.clipboard.writeText(text).then(() => {
+                showToast('Copied!', 'Text copied to clipboard', 'success');
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+                showToast('Error', 'Failed to copy to clipboard', 'error');
+            });
+        }
+        
+        function generateApiKey(userType) {
+            const prefix = userType === 'admins' ? 'sk_admin_' : 'sk_cust_';
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            let result = '';
+            
+            for (let i = 0; i < 16; i++) {
+                result += chars.charAt(Math.floor(Math.random() * chars.length));
+            }
+            
+            return prefix + result;
+        }
+        
+        function generateApiKeyField() {
+            const userType = document.getElementById('userType').value;
+            if (!userType) {
+                showToast('Error', 'Please select user type first', 'error');
+                return;
+            }
+            
+            const newKey = generateApiKey(userType);
+            document.getElementById('apiKey').value = newKey;
+            showToast('Generated', 'New API key generated', 'success');
+        }
+        
+        function showToast(title, message, type = 'info', duration = 5000) {
+            const toastEl = document.getElementById('liveToast');
+            const toastTitle = document.getElementById('toastTitle');
+            const toastMessage = document.getElementById('toastMessage');
+            const toastTime = document.getElementById('toastTime');
+            
+            const now = new Date();
+            toastTime.textContent = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            
+            // Set header color based on type
+            const headerColors = {
+                'success': 'bg-success',
+                'error': 'bg-danger',
+                'info': 'bg-primary',
+                'warning': 'bg-warning'
+            };
+            
+            const headerClass = headerColors[type] || 'bg-primary';
+            toastEl.querySelector('.toast-header').className = `toast-header ${headerClass} text-white`;
+            
+            toastTitle.textContent = title;
+            toastMessage.innerHTML = message;
+            
+            const toast = new bootstrap.Toast(toastEl, { delay: duration });
+            toast.show();
+            
+            // Add to activity logs in UI
+            addToActivityLogs(`${title}: ${message.replace(/<[^>]*>/g, '')}`, type);
+        }
+        
+        function addToActivityLogs(message, type = 'info') {
+            // This adds to the UI logs, not the database
+            const logsContainer = document.getElementById('logsContainer');
+            if (!logsContainer) return;
+            
+            const icon = {
+                'success': 'bi-check-circle',
+                'error': 'bi-exclamation-circle',
+                'info': 'bi-info-circle',
+                'warning': 'bi-exclamation-triangle'
+            }[type] || 'bi-info-circle';
+            
+            const alertClass = {
+                'success': 'alert-success',
+                'error': 'alert-danger',
+                'info': 'alert-info',
+                'warning': 'alert-warning'
+            }[type] || 'alert-info';
+            
+            const alert = document.createElement('div');
+            alert.className = `alert ${alertClass} alert-custom mb-2`;
+            alert.innerHTML = `
+                <i class="bi ${icon}"></i> 
+                <span class="log-time">[${new Date().toLocaleTimeString()}]</span> 
+                ${message}
+            `;
+            
+            logsContainer.prepend(alert);
+            
+            // Keep only last 10 logs
+            const alerts = logsContainer.querySelectorAll('.alert');
+            if (alerts.length > 10) {
+                alerts[alerts.length - 1].remove();
+            }
+        }
+        
+        function clearLogs() {
+            if (confirm('Clear all activity logs from this session?')) {
+                const logsContainer = document.getElementById('logsContainer');
+                if (logsContainer) {
+                    logsContainer.innerHTML = '';
+                    showToast('Cleared', 'Activity logs cleared', 'info');
+                }
+            }
+        }
+        
+        function refreshSignals() {
+            loadSignals();
+            loadSignalHistory();
+            showToast('Refreshed', 'Signals refreshed', 'info');
+        }
+        
+        function refreshUsers() {
+            loadUsers();
+            showToast('Refreshed', 'Users refreshed', 'info');
+        }
+        
+        function refreshDeliveries() {
+            loadDeliveries();
+            showToast('Refreshed', 'Deliveries refreshed', 'info');
+        }
+        
+        async function submitSendSignal() {
+            const symbol = document.getElementById('symbol').value.trim();
+            const signalType = document.getElementById('signalType').value;
+            const price = parseFloat(document.getElementById('price').value);
+            const sl = parseFloat(document.getElementById('sl').value);
+            const tp = parseFloat(document.getElementById('tp').value);
+            
+            if (!symbol || isNaN(price) || isNaN(sl) || isNaN(tp)) {
+                showToast('Error', 'Please fill in all fields with valid numbers', 'error');
+                return;
+            }
+            
+            // Validate TP/SL logic
+            if (signalType === 'buy') {
+                if (tp <= price) {
+                    showToast('Error', 'TP must be greater than entry price for BUY', 'error');
+                    return;
+                }
+                if (sl >= price) {
+                    showToast('Error', 'SL must be less than entry price for BUY', 'error');
+                    return;
+                }
+            } else {
+                if (tp >= price) {
+                    showToast('Error', 'TP must be less than entry price for SELL', 'error');
+                    return;
+                }
+                if (sl <= price) {
+                    showToast('Error', 'SL must be greater than entry price for SELL', 'error');
+                    return;
+                }
+            }
+            
+            try {
+                // Note: This requires a separate API endpoint for sending signals
+                // For now, we'll show a message
+                showToast('Info', 
+                        `Signal prepared:<br>
+                        Symbol: ${symbol}<br>
+                        Type: ${signalType.toUpperCase()}<br>
+                        Price: ${price}<br>
+                        SL: ${sl} | TP: ${tp}`, 
+                        'info');
+                
+                bootstrap.Modal.getInstance(document.getElementById('sendSignalModal')).hide();
+                document.getElementById('sendSignalForm').reset();
+                
+                // In production, you would make an API call here
+                // await apiCall('/signals/send', {
+                //     method: 'POST',
+                //     body: JSON.stringify({ symbol, price, sl, tp, type: signalType })
+                // });
+                
+            } catch (error) {
+                showToast('Error', 'Failed to send signal', 'error');
+            }
+        }
+    </script>
+</body>
+</html>

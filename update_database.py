@@ -1,64 +1,142 @@
+#!/usr/bin/env python3
+"""
+Update database structure for API Key Management
+"""
 import sqlite3
+import json
 import os
 
 def update_database():
-    """Add TP column to existing database"""
+    print("🔄 Updating database for enhanced features...")
     
-    db_file = 'signals.db'
-    
-    if not os.path.exists(db_file):
-        print(f"❌ Database file '{db_file}' not found!")
-        print("✅ No need to update, new database will be created automatically")
-        return
-    
-    conn = sqlite3.connect(db_file)
-    cursor = conn.cursor()
+    db_name = 'trading_signals.db'
     
     try:
-        # Check if TP column exists
-        cursor.execute("PRAGMA table_info(signals)")
-        columns = [col[1] for col in cursor.fetchall()]
+        conn = sqlite3.connect(db_name)
+        cursor = conn.cursor()
         
-        if 'tp' not in columns:
-            print("Adding TP column to signals table...")
-            cursor.execute("ALTER TABLE signals ADD COLUMN tp REAL DEFAULT 0")
-            conn.commit()
-            print("✅ TP column added successfully!")
-            
-            # Update existing records with default TP value
-            cursor.execute("""
-                UPDATE signals 
-                SET tp = 
-                    CASE 
-                        WHEN type = 'buy' THEN price * 1.02
-                        WHEN type = 'sell' THEN price * 0.98
-                        ELSE price
-                    END
-                WHERE tp = 0 OR tp IS NULL
-            """)
-            updated = cursor.rowcount
-            if updated > 0:
-                print(f"✅ Updated {updated} records with default TP values")
-        else:
-            print("✅ TP column already exists in the database")
+        # 1. Add user tracking table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_sessions (
+                session_id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                user_type TEXT NOT NULL,
+                login_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_activity TIMESTAMP,
+                ip_address TEXT,
+                user_agent TEXT
+            )
+        ''')
+        
+        # 2. Add API Key audit log
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS api_key_audit (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                user_type TEXT NOT NULL,
+                action TEXT NOT NULL,
+                old_key_hash TEXT,
+                new_key_hash TEXT,
+                changed_by TEXT,
+                changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                ip_address TEXT
+            )
+        ''')
+        
+        # 3. Add user activity log
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_activity (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT NOT NULL,
+                user_type TEXT NOT NULL,
+                action TEXT NOT NULL,
+                details TEXT,
+                ip_address TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        
+        # 4. Update signals table for better tracking
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS signals_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                signal_id TEXT UNIQUE,
+                symbol TEXT NOT NULL,
+                price REAL NOT NULL,
+                sl REAL NOT NULL,
+                tp REAL NOT NULL,
+                type TEXT NOT NULL,
+                admin_id TEXT NOT NULL,
+                admin_address TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                expires_at TIMESTAMP,
+                status TEXT DEFAULT 'active',
+                risk_reward_ratio REAL,
+                expected_profit REAL,
+                expected_loss REAL
+            )
+        ''')
+        
+        # Copy data from old signals table if exists
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='signals'")
+        if cursor.fetchone():
+            cursor.execute('''
+                INSERT INTO signals_new 
+                (signal_id, symbol, price, sl, tp, type, admin_id, admin_address, created_at, expires_at, status)
+                SELECT signal_id, symbol, price, sl, tp, type, admin_id, admin_address, created_at, expires_at, status
+                FROM signals
+            ''')
+            cursor.execute("DROP TABLE signals")
+        
+        cursor.execute("ALTER TABLE signals_new RENAME TO signals")
+        
+        # 5. Create indexes for better performance
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_signal_status ON signals(status, expires_at)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_sessions ON user_sessions(user_id, user_type)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_signal_deliveries ON signal_deliveries(signal_id, customer_id)')
+        
+        conn.commit()
+        conn.close()
+        
+        print("✅ Database updated successfully")
+        print("   • Added user sessions tracking")
+        print("   • Added API Key audit log")
+        print("   • Added user activity log")
+        print("   • Enhanced signals table")
+        print("   • Created performance indexes")
         
     except Exception as e:
         print(f"❌ Error updating database: {e}")
-    finally:
-        conn.close()
-    
-    print("\n✅ Database update completed successfully!")
+        
+        # Fallback: Create basic database if doesn't exist
+        try:
+            if not os.path.exists(db_name):
+                conn = sqlite3.connect(db_name)
+                cursor = conn.cursor()
+                
+                # Basic signals table
+                cursor.execute('''
+                    CREATE TABLE signals (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        signal_id TEXT UNIQUE,
+                        symbol TEXT NOT NULL,
+                        price REAL NOT NULL,
+                        sl REAL NOT NULL,
+                        tp REAL NOT NULL,
+                        type TEXT NOT NULL,
+                        admin_id TEXT NOT NULL,
+                        admin_address TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        expires_at TIMESTAMP,
+                        status TEXT DEFAULT 'active'
+                    )
+                ''')
+                
+                conn.commit()
+                conn.close()
+                print("✅ Created basic database structure")
+        except:
+            print("⚠️  Could not create database")
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("       DATABASE UPDATE TOOL (for TP support)")
-    print("=" * 60)
-    print("This script will update your existing database to support TP")
-    print("=" * 60)
-    
     update_database()
-    
-    print("\n📝 Next steps:")
-    print("1. Replace your existing Python files with the new versions")
-    print("2. Restart the server and all clients")
-    print("3. Enjoy TP support in your trading signals!")

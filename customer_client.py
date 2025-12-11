@@ -12,7 +12,6 @@ import random
 import string
 import os
 import sys
-import hashlib
 
 class CustomerClient:
     def __init__(self, server_host='localhost', server_port=9999):
@@ -25,17 +24,20 @@ class CustomerClient:
         # Load configuration
         self.config = self.load_config()
         
-        # Authentication methods
+        # Authentication methods - FIXED: Use API key from config
         self.use_api_key = self.config.get('use_api_key', True)
-        self.api_key = self.config.get('api_key', '')
-        self.customer_id = self.config.get('customer_id', '')
-        self.password = self.config.get('password', 'cust123')  # Legacy fallback
+        self.api_key = self.config.get('api_key', 'sk_cust_abc123def456')  # Default fallback
+        self.customer_id = self.config.get('customer_id', 'CUST_001')  # Default customer ID
+        self.password = self.api_key  # Legacy fallback - use API key as password
         
-        # If no customer_id, generate one
-        if not self.customer_id:
-            self.customer_id = self.generate_customer_id()
-            self.config['customer_id'] = self.customer_id
-            self.save_config()
+        # If no customer_id in config, use default
+        if not self.customer_id or self.customer_id == 'CUST_001':
+            # Try to find customer ID based on API key
+            customer_id = self.find_customer_id_by_api_key()
+            if customer_id:
+                self.customer_id = customer_id
+                self.config['customer_id'] = customer_id
+                self.save_config()
         
         # Tracking
         self.received_signals = []  # All signals received
@@ -53,13 +55,31 @@ class CustomerClient:
         print(f"🔐 Auth Method: {'API Key' if self.use_api_key else 'Password (Legacy)'}")
         print(f"🌐 Server: {self.server_host}:{self.server_port}")
     
+    def find_customer_id_by_api_key(self):
+        """Find customer ID based on API key from server's default keys"""
+        # Server's default customer API keys
+        default_customer_keys = {
+            "CUST_001": "sk_cust_abc123def456",
+            "CUST_002": "sk_cust_xyz789uvw012",
+            "CUST_003": "sk_cust_mno345pqr678",
+            "CUST_004": "sk_cust_jkl234mno567",
+            "CUST_005": "sk_cust_efg890hij123"
+        }
+        
+        # Find matching customer ID
+        for cust_id, key in default_customer_keys.items():
+            if self.api_key == key:
+                return cust_id
+        
+        return "CUST_001"  # Default fallback
+    
     def load_config(self):
         """Load configuration from file"""
         config_file = 'customer_config.json'
         default_config = {
             'use_api_key': True,
-            'api_key': '',
-            'customer_id': '',
+            'api_key': 'sk_cust_abc123def456',
+            'customer_id': 'CUST_001',
             'password': 'cust123',
             'server_host': 'localhost',
             'server_port': 9999,
@@ -109,11 +129,11 @@ class CustomerClient:
             'timestamp': datetime.now().isoformat()
         }
         
+        # FIXED: Always include both api_key and password for compatibility
         if self.use_api_key and self.api_key:
-            # Use API Key authentication
             request['api_key'] = self.api_key
+            request['password'] = self.api_key  # Include password too
         else:
-            # Use legacy password authentication
             request['password'] = self.password
         
         return request
@@ -181,32 +201,48 @@ class CustomerClient:
         
         response = self.connect_and_check('check_signal')
         
+        # DEBUG: Tampilkan response
+        if display:
+            print(f"\n📋 SERVER RESPONSE:")
+            print(f"   Status: {response.get('status')}")
+            print(f"   Signal Available: {response.get('signal_available')}")
+            print(f"   Total Signals: {response.get('total_signals', 0)}")
+            print(f"   New Signals: {response.get('new_signals', 0)}")
+        
         if response.get('status') == 'success':
             if response.get('signal_available'):
                 signals = response.get('signals', [])
-                new_signals_count = response.get('new_signals_count', 0)
+                new_signals_count = response.get('new_signals', 0)  # FIXED: tanpa "_count"
                 total_active_signals = response.get('total_active_signals', 0)
                 
                 if display:
-                    print(f"📡 Active signals on server: {total_active_signals}")
+                    print(f"\n📡 Active signals on server: {total_active_signals}")
                     print(f"📥 New signals available: {new_signals_count}")
                 
-                if new_signals_count == 0:
+                # PERBAIKAN: Tampilkan semua signal, bukan hanya yang new_signals_count > 0
+                if not signals:  # Jika signals array kosong
                     if display:
-                        print("📭 No new signals available")
+                        print("📭 No signals in response array")
                     return {
                         'success': False,
-                        'message': 'No new signals',
+                        'message': 'No signals in response',
                         'new_signals_count': 0,
                         'total_active_signals': total_active_signals
                     }
                 
-                # Process each new signal
+                # Process signals
                 processed_count = 0
                 new_signals_list = []
                 
                 for signal in signals:
                     signal_id = signal.get('signal_id')
+                    
+                    # DEBUG: Tampilkan setiap signal
+                    if display:
+                        is_new = signal.get('is_new', False)
+                        symbol = signal.get('symbol', 'N/A')
+                        signal_type = signal.get('type', 'N/A')
+                        print(f"   Signal: {signal_id[:8]}... - {symbol} {signal_type} - New: {is_new}")
                     
                     # Skip if already received
                     if signal_id in self.received_signal_ids:
@@ -230,20 +266,24 @@ class CustomerClient:
                 if self.config.get('auto_save_history', True) and processed_count > 0:
                     self.save_signal_history()
                 
-                if display and processed_count > 0:
-                    print(f"\n✅ Successfully received {processed_count} new signal(s)")
-                    print(f"📊 Total unique signals received: {len(self.received_signal_ids)}")
+                if display:
+                    if processed_count > 0:
+                        print(f"\n✅ Successfully received {processed_count} new signal(s)")
+                        print(f"📊 Total unique signals received: {len(self.received_signal_ids)}")
+                    else:
+                        print(f"\nℹ️  No new signals (all {len(signals)} signals already seen)")
                 
                 return {
-                    'success': True,
+                    'success': True if processed_count > 0 else False,
                     'new_signals_count': processed_count,
                     'new_signals': new_signals_list,
-                    'total_active_signals': total_active_signals
+                    'total_active_signals': total_active_signals,
+                    'message': f'Processed {processed_count} new signals' if processed_count > 0 else 'No new signals'
                 }
             else:
                 message = response.get('message', 'No signal available')
                 if display:
-                    print(f"📭 {message}")
+                    print(f"\n📭 {message}")
                 return {
                     'success': False,
                     'message': message,
@@ -256,11 +296,11 @@ class CustomerClient:
             if 'authentication' in error_msg.lower() or 'auth' in error_msg.lower():
                 self.connection_stats['auth_errors'] += 1
                 if display:
-                    print(f"🔐 Authentication Error: {error_msg}")
+                    print(f"\n🔐 Authentication Error: {error_msg}")
                     print("💡 Try reconfiguring your API Key in settings")
             else:
                 if display:
-                    print(f"❌ Error: {error_msg}")
+                    print(f"\n❌ Error: {error_msg}")
             
             return {
                 'success': False,
@@ -624,7 +664,8 @@ class CustomerClient:
             
             # Show authentication method used
             if self.use_api_key:
-                print("🔐 Authentication: API Key")
+                masked_key = self.api_key[:8] + "..." + self.api_key[-4:] if len(self.api_key) > 12 else "***"
+                print(f"🔐 API Key: {masked_key}")
             else:
                 print("🔐 Authentication: Password (Legacy)")
         else:
@@ -645,9 +686,10 @@ class CustomerClient:
         print("1. Use API Key (Recommended)")
         print("2. Use Password (Legacy)")
         print("3. Enter API Key Manually")
-        print("4. Back to Menu")
+        print("4. Change Customer ID")
+        print("5. Back to Menu")
         
-        choice = input("Select [1-4]: ").strip()
+        choice = input("Select [1-5]: ").strip()
         
         if choice == '1':
             # Use API Key from config
@@ -673,11 +715,30 @@ class CustomerClient:
                 self.use_api_key = True
                 self.config['api_key'] = new_api_key
                 self.config['use_api_key'] = True
+                
+                # Auto-detect customer ID based on API key
+                customer_id = self.find_customer_id_by_api_key()
+                if customer_id:
+                    self.customer_id = customer_id
+                    self.config['customer_id'] = customer_id
+                    print(f"✅ Auto-detected Customer ID: {customer_id}")
+                
                 self.save_config()
                 print("✅ API Key saved and enabled!")
             else:
                 print("❌ API Key cannot be empty")
         elif choice == '4':
+            # Change Customer ID
+            print("\nEnter your Customer ID:")
+            new_customer_id = input("Customer ID: ").strip()
+            if new_customer_id:
+                self.customer_id = new_customer_id
+                self.config['customer_id'] = new_customer_id
+                self.save_config()
+                print("✅ Customer ID updated!")
+            else:
+                print("❌ Customer ID cannot be empty")
+        elif choice == '5':
             return
         else:
             print("❌ Invalid choice")

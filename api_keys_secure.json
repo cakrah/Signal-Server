@@ -1,0 +1,10 @@
+{
+  "admins": {
+    "ADMIN_001": "sk_admin_secure123",
+    "ADMIN_002": "sk_admin_secure456"
+  },
+  "customers": {
+    "CUST_001": "sk_cust_abc123def456",
+    "agus001": "sk_cust_ah4lLpSGjfb1FEHK"
+  }
+}

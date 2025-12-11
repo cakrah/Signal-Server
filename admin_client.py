@@ -22,11 +22,11 @@ class AdminClient:
         # Load configuration
         self.config = self.load_config()
         
-        # Authentication
+        # Authentication - FIXED: Always use API key from config
         self.use_api_key = self.config.get('use_api_key', True)
-        self.api_key = self.config.get('api_key', '')
+        self.api_key = self.config.get('api_key', 'sk_admin_secure123')  # Default fallback
         self.admin_id = self.config.get('admin_id', 'ADMIN_001')
-        self.password = self.config.get('password', 'admin123')  # Legacy fallback
+        self.password = self.api_key  # Legacy fallback - use API key as password
         
         # Session management
         self.session_id = None
@@ -41,7 +41,7 @@ class AdminClient:
         config_file = 'admin_config.json'
         default_config = {
             'use_api_key': True,
-            'api_key': '',
+            'api_key': 'sk_admin_secure123',
             'admin_id': 'ADMIN_001',
             'password': 'admin123',
             'server_host': 'localhost',
@@ -86,9 +86,10 @@ class AdminClient:
         if self.session_id:
             request['session_id'] = self.session_id
         
-        # Add authentication
+        # Add authentication - FIXED: Always include both for compatibility
         if self.use_api_key and self.api_key:
             request['api_key'] = self.api_key
+            request['password'] = self.api_key  # Include password too for legacy compatibility
         else:
             request['password'] = self.password
         

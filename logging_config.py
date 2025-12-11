@@ -1,5 +1,6 @@
 import logging
 import os
+import json  # <-- IMPORT JSON
 from logging.handlers import RotatingFileHandler, TimedRotatingFileHandler
 from datetime import datetime
 
@@ -121,12 +122,28 @@ def setup_logging(app_name='TradingSignal', log_dir=None):
         print(f"⚠️  Could not create access_handler: {e}")
         access_handler = console_handler  # Fallback to console
     
-    # Add all handlers
+    # 6. Admin Activity Handler (NEW)
+    try:
+        admin_handler = RotatingFileHandler(
+            filename=os.path.join(log_dir, 'admin_activities.log'),
+            maxBytes=5*1024*1024,
+            backupCount=30,
+            encoding='utf-8'
+        )
+        admin_handler.setLevel(logging.INFO)
+        admin_formatter = logging.Formatter(
+            '%(asctime)s - ADMIN - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        admin_handler.setFormatter(admin_formatter)
+    except Exception as e:
+        print(f"⚠️  Could not create admin_handler: {e}")
+        admin_handler = console_handler
+    
+    # Add all handlers to root logger
     logger.addHandler(console_handler)
     logger.addHandler(all_logs_handler)
     logger.addHandler(error_handler)
-    logger.addHandler(signal_handler)
-    logger.addHandler(access_handler)
     
     # Create signal-specific logger
     signal_logger = logging.getLogger(f'{app_name}.Signals')
@@ -138,9 +155,16 @@ def setup_logging(app_name='TradingSignal', log_dir=None):
     access_logger.addHandler(access_handler)
     access_logger.propagate = False
     
+    # Create admin activity logger (NEW)
+    admin_activity_logger = logging.getLogger(f'{app_name}.Admin')
+    admin_activity_logger.addHandler(admin_handler)
+    admin_activity_logger.propagate = False
+    
     print(f"✅ Logging system initialized. Logs directory: {log_dir}")
     print(f"   Log files: {os.listdir(log_dir) if os.path.exists(log_dir) else 'Directory not found'}")
-    return logger, signal_logger, access_logger
+    
+    # Return semua loggers yang dibutuhkan
+    return logger, signal_logger, access_logger, admin_activity_logger
 
 def log_signal(signal_logger, action, **details):
     """Log trading signal activity"""
@@ -149,7 +173,7 @@ def log_signal(signal_logger, action, **details):
         'timestamp': datetime.now().isoformat(),
         **details
     }
-    signal_logger.info(f"{action}: {log_data}")
+    signal_logger.info(f"{action}: {json.dumps(log_data)}")
 
 def log_access(access_logger, client_type, address, action, **details):
     """Log client access"""
@@ -160,12 +184,34 @@ def log_access(access_logger, client_type, address, action, **details):
         'timestamp': datetime.now().isoformat(),
         **details
     }
-    access_logger.info(f"{client_type} {action}: {log_data}")
+    access_logger.info(f"{client_type} {action}: {json.dumps(log_data)}")
+
+def log_admin_activity(admin_logger, admin_id, action, details="", ip_address=""):
+    """Log admin activity for auditing (NEW)"""
+    log_data = {
+        'admin_id': admin_id,
+        'action': action,
+        'details': details,
+        'ip_address': ip_address,
+        'timestamp': datetime.now().isoformat()
+    }
+    admin_logger.info(f"ACTIVITY: {json.dumps(log_data)}")
+
+def log_customer_activity(access_logger, customer_id, action, details="", ip_address=""):
+    """Log customer activity (NEW)"""
+    log_data = {
+        'customer_id': customer_id,
+        'action': action,
+        'details': details,
+        'ip_address': ip_address,
+        'timestamp': datetime.now().isoformat()
+    }
+    access_logger.info(f"CUSTOMER_ACTIVITY: {json.dumps(log_data)}")
 
 # Usage example
 if __name__ == "__main__":
     # Setup logging
-    logger, signal_logger, access_logger = setup_logging()
+    logger, signal_logger, access_logger, admin_logger = setup_logging()
     
     # Test logs
     logger.info("System started successfully")
@@ -174,10 +220,18 @@ if __name__ == "__main__":
     
     # Test signal logging
     log_signal(signal_logger, "SIGNAL_CREATED", 
-               symbol="BTCUSD", price=50000, type="buy")
+               symbol="BTCUSD", price=50000, type="buy", sl=49500, tp=51000)
     
     # Test access logging
     log_access(access_logger, "admin", "127.0.0.1:1234", 
                "CONNECTED", user="admin1")
+    
+    # Test admin activity logging
+    log_admin_activity(admin_logger, "ADMIN_001", "login", 
+                       "User logged in via API key", "127.0.0.1")
+    
+    # Test customer activity logging
+    log_customer_activity(access_logger, "CUST_001", "receive_signal",
+                          "Received signal SIG_12345", "127.0.0.1")
     
     print("✅ Logging test completed. Check logs/ directory.")

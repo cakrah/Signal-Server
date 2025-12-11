@@ -1,1 +1,17 @@
-Flask==2.3.3 
+# ============================================
+# TRADING SYSTEM - MINIMAL PRODUCTION REQUIREMENTS
+# ============================================
+
+# Flask Ecosystem (WEB)
+Flask==2.3.3
+Flask-CORS==4.0.0
+gunicorn==21.2.0
+python-dotenv==1.0.0
+
+# Socket/Async (SOCKET SERVER)
+python-socketio==5.10.0
+eventlet==0.33.3
+websockets==12.0
+
+# Utilities
+requests==2.31.0

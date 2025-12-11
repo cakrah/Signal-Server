@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Trading Signal Server v4.0 - WITH API KEY FOR BOTH ADMIN & CUSTOMER
-Enhanced security with API Key authentication for all users
+Trading Signal Server v4.2 - PRODUCTION READY
+Production version tanpa data hardcoded
 """
 
 import socket
@@ -9,463 +9,1142 @@ import threading
 import json
 import time
 from datetime import datetime
-import signal
 import sys
 import os
 import uuid
 import traceback
+import hashlib
+from typing import Dict, List, Optional, Tuple
 
-# Import database and logging
-try:
-    from database import database
-    from logging_config import setup_logging, log_signal, log_access
-    DB_ENABLED = True
-    logger, signal_logger, access_logger = setup_logging('TradingSignalServer')
-    print("✅ Database and logging modules loaded successfully")
-except ImportError as e:
-    print(f"⚠️ Database/Logging modules not found: {e}")
-    print("⚠️ Running in fallback mode (in-memory only)")
-    DB_ENABLED = False
-    logger = None
-    signal_logger = None
-    access_logger = None
+# Global flag untuk database
+GLOBAL_DB_ENABLED = True
+
+class UserStatus:
+    """Status management untuk user"""
+    ACTIVE = 'active'
+    INACTIVE = 'inactive'
+    
+    @staticmethod
+    def is_valid(status: str) -> bool:
+        return status in [UserStatus.ACTIVE, UserStatus.INACTIVE]
+
+class APIManager:
+    """Centralized API Key Management dengan status"""
+    
+    def __init__(self, server):
+        self.server = server
+        self.api_keys_file = 'api_keys_secure.json'
+        self.user_status_file = 'user_status.json'
+        self.api_keys = self.load_api_keys()
+        self.user_status = self.load_user_status()
+        
+    def load_api_keys(self) -> Dict:
+        """Load API keys from secure file"""
+        try:
+            if os.path.exists(self.api_keys_file):
+                with open(self.api_keys_file, 'r') as f:
+                    keys = json.load(f)
+                    self.server.log_info(f"Loaded API keys: {len(keys.get('admins', {}))} admins, {len(keys.get('customers', {}))} customers")
+                    return keys
+        except Exception as e:
+            self.server.log_warning(f"Error loading API keys: {e}")
+        
+        # Create empty file for production
+        empty_structure = {
+            "admins": {},
+            "customers": {}
+        }
+        
+        try:
+            with open(self.api_keys_file, 'w') as f:
+                json.dump(empty_structure, f, indent=2)
+            self.server.log_info("Created empty API keys file for production")
+        except Exception as e:
+            self.server.log_error(f"Failed to create API keys file: {e}")
+        
+        return empty_structure
+    
+    def load_user_status(self) -> Dict:
+        """Load user status from file"""
+        try:
+            if os.path.exists(self.user_status_file):
+                with open(self.user_status_file, 'r') as f:
+                    status = json.load(f)
+                    return status
+        except Exception as e:
+            self.server.log_warning(f"Error loading user status: {e}")
+        
+        # Create empty file for production
+        empty_structure = {
+            "admins": {},
+            "customers": {}
+        }
+        
+        try:
+            with open(self.user_status_file, 'w') as f:
+                json.dump(empty_structure, f, indent=2)
+            self.server.log_info("Created empty user status file for production")
+        except Exception as e:
+            self.server.log_error(f"Failed to create user status file: {e}")
+        
+        return empty_structure
+    
+    def save_user_status(self) -> bool:
+        """Save user status to file"""
+        try:
+            with open(self.user_status_file, 'w') as f:
+                json.dump(self.user_status, f, indent=2)
+            return True
+        except Exception as e:
+            self.server.log_error(f"Failed to save user status: {e}")
+            return False
+    
+    def validate_api_key(self, user_type: str, user_id: str, api_key: str) -> bool:
+        """Validate API key dengan cek status user"""
+        if user_type not in ["admins", "customers"]:
+            return False
+        
+        # Cek apakah user ada
+        if user_id not in self.api_keys.get(user_type, {}):
+            return False
+        
+        # Cek API key
+        expected_key = self.api_keys[user_type][user_id]
+        if api_key != expected_key:
+            return False
+        
+        # Cek status user
+        user_status_info = self.user_status.get(user_type, {}).get(user_id, {})
+        if user_status_info.get('status') == UserStatus.INACTIVE:
+            self.server.log_warning(f"User {user_type}/{user_id} is inactive")
+            return False
+        
+        return True
+    
+    def add_api_key(self, user_type: str, user_id: str, api_key: str) -> bool:
+        """Add new API key dengan status default active"""
+        if user_type not in self.api_keys:
+            self.api_keys[user_type] = {}
+        
+        # Add to keys
+        self.api_keys[user_type][user_id] = api_key
+        
+        # Add to status dengan default active
+        if user_type not in self.user_status:
+            self.user_status[user_type] = {}
+        
+        self.user_status[user_type][user_id] = {
+            "status": UserStatus.ACTIVE,
+            "created": datetime.now().isoformat(),
+            "last_modified": datetime.now().isoformat()
+        }
+        
+        # Save both files
+        return self.save_api_keys() and self.save_user_status()
+    
+    def revoke_api_key(self, user_type: str, user_id: str) -> bool:
+        """Revoke API key"""
+        if user_type in self.api_keys and user_id in self.api_keys[user_type]:
+            del self.api_keys[user_type][user_id]
+            
+            # Also remove from status
+            if user_type in self.user_status and user_id in self.user_status[user_type]:
+                del self.user_status[user_type][user_id]
+            
+            return self.save_api_keys() and self.save_user_status()
+        return False
+    
+    def set_user_status(self, user_type: str, user_id: str, status: str) -> bool:
+        """Set user status (active/inactive)"""
+        if not UserStatus.is_valid(status):
+            return False
+        
+        if user_type not in self.user_status:
+            self.user_status[user_type] = {}
+        
+        if user_id not in self.user_status[user_type]:
+            # Create new entry if doesn't exist
+            self.user_status[user_type][user_id] = {
+                "created": datetime.now().isoformat()
+            }
+        
+        self.user_status[user_type][user_id].update({
+            "status": status,
+            "last_modified": datetime.now().isoformat()
+        })
+        
+        return self.save_user_status()
+    
+    def get_user_status(self, user_type: str, user_id: str) -> Optional[str]:
+        """Get user status"""
+        return self.user_status.get(user_type, {}).get(user_id, {}).get('status', UserStatus.ACTIVE)
+    
+    def get_all_users_with_status(self) -> Dict:
+        """Get all users with their status"""
+        result = {
+            "admins": {},
+            "customers": {}
+        }
+        
+        for user_type in ["admins", "customers"]:
+            for user_id in self.api_keys.get(user_type, {}):
+                status_info = self.user_status.get(user_type, {}).get(user_id, {})
+                masked_key = self.mask_api_key(self.api_keys[user_type][user_id])
+                
+                result[user_type][user_id] = {
+                    "api_key": masked_key,
+                    "status": status_info.get('status', UserStatus.ACTIVE),
+                    "created": status_info.get('created', datetime.now().isoformat()),
+                    "last_modified": status_info.get('last_modified', None)
+                }
+        
+        return result
+    
+    def save_api_keys(self) -> bool:
+        """Save API keys to file"""
+        try:
+            with open(self.api_keys_file, 'w') as f:
+                json.dump(self.api_keys, f, indent=2)
+            return True
+        except Exception as e:
+            self.server.log_error(f"Failed to save API keys: {e}")
+            return False
+    
+    def mask_api_key(self, api_key: str) -> str:
+        """Mask API key for display"""
+        if len(api_key) <= 12:
+            return "***"
+        return f"{api_key[:8]}...{api_key[-4:]}"
+    
+    def list_keys(self, mask: bool = True) -> Dict:
+        """List API keys (with masking)"""
+        keys_copy = {k: v.copy() for k, v in self.api_keys.items()}
+        
+        if mask:
+            for user_type in keys_copy:
+                for user_id in keys_copy[user_type]:
+                    keys_copy[user_type][user_id] = self.mask_api_key(keys_copy[user_type][user_id])
+        
+        return keys_copy
 
 class TradingSignalServer:
     def __init__(self, config_file='config.json'):
-        # Load konfigurasi
-        try:
-            with open(config_file, 'r') as f:
-                self.config = json.load(f)
-            print("✅ Config loaded from config.json")
-        except FileNotFoundError:
-            self.config = {
-                'server': {'host': '0.0.0.0', 'port': 9999},
-                'security': {
-                    'rate_limit_per_minute': 60,
-                    'max_connections': 100,
-                    'session_timeout_minutes': 30
-                },
-                'signal_settings': {
-                    'expiry_minutes': 5,
-                    'max_active_signals': 10,
-                    'check_interval_seconds': 60
-                }
-            }
-            print("⚠️ config.json not found, using default config")
+        self._setup_logging()
+        self.config = self.load_config(config_file)
         
-        # === CLOUD DEPLOYMENT SETTINGS ===
-        self.host = self.config['server']['host']
-        self.port = int(os.environ.get('PORT', self.config['server']['port']))
+        # Server settings
+        self.host = self.config.get('server', {}).get('host', '0.0.0.0')
+        self.port = int(os.environ.get('PORT', self.config.get('server', {}).get('port', 9999)))
         
-        # === SECURITY SETTINGS ===
-        # Load API Keys for both admins and customers
-        self.admin_api_keys, self.customer_api_keys = self.load_api_keys()
+        # Initialize API Manager dengan status
+        self.api_manager = APIManager(self)
         
-        # Rate limiting
-        self.rate_limits = {}  # user_id: [timestamps]
-        self.max_requests_per_minute = self.config['security'].get('rate_limit_per_minute', 60)
+        # Security settings
+        security_config = self.config.get('security', {})
+        self.customer_rate_limit = security_config.get('rate_limit_per_minute', 60)
+        self.admin_rate_limit = security_config.get('admin_rate_limit', 120)
+        self.max_connections = security_config.get('max_connections', 100)
+        self.session_timeout = security_config.get('session_timeout_minutes', 30) * 60
         
-        # Admin rate limit (higher limit)
-        self.admin_max_requests = 120
-        
-        # Connection tracking
-        self.active_connections = 0
-        self.max_connections = self.config['security'].get('max_connections', 100)
-        self.connection_lock = threading.Lock()
-        
-        # Session tracking
-        self.active_sessions = {}  # session_id: {user_id, login_time, last_activity}
-        self.session_timeout = self.config['security'].get('session_timeout_minutes', 30) * 60
-        # =============================
-        
-        self.expiry_minutes = self.config['signal_settings']['expiry_minutes']
-        self.max_active_signals = self.config['signal_settings'].get('max_active_signals', 10)
+        # Signal settings
+        signal_settings = self.config.get('signal_settings', {})
+        self.expiry_minutes = signal_settings.get('expiry_minutes', 5)
+        self.max_active_signals = signal_settings.get('max_active_signals', 10)
         
         # Data storage
-        self.active_signals = []  # List of active signals
+        self.active_signals = []
         self.signal_lock = threading.Lock()
         self.running = True
         
-        # Tracking signal deliveries per customer
+        # Database integration
+        self.db_enabled = GLOBAL_DB_ENABLED
+        if self.db_enabled:
+            try:
+                from database import database as db
+                self.db = db
+                self.db.log_system('INFO', 'server', 'Server starting', 
+                                 {'version': '4.2', 'port': self.port})
+                self.log_info("✅ Database initialized successfully")
+            except Exception as e:
+                self.log_error(f"❌ Database initialization failed: {e}")
+                self.db_enabled = False
+        else:
+            self.log_warning("⚠️ Database disabled (GLOBAL_DB_ENABLED = False)")
+        
+        # Connection tracking
+        self.active_connections = 0
+        self.connection_lock = threading.Lock()
+        
+        # Rate limiting
+        self.rate_limits = {}
+        
+        # Session management
+        self.active_sessions = {}
+        
+        # Customer tracking
         self.customer_received_signals = {}
         
-        # Admin activity log
+        # Admin activities
         self.admin_activities = []
         
-        # Setup socket
-        self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # Server socket
+        self.server_socket = None
         
-        # Initialize database if enabled
-        if DB_ENABLED:
-            self.init_database()
-        
-        # Untuk tracking uptime
+        # Uptime tracking
         self.start_time = time.time()
         
-        self.log_info(f"Server initialized at {self.host}:{self.port}")
-        self.log_info("Mode: Each customer gets EACH active signal ONCE")
-        self.log_info(f"Security: API Key authentication for ALL users")
-        self.log_info(f"Admins: {len(self.admin_api_keys)} | Customers: {len(self.customer_api_keys)}")
-        self.log_info(f"Rate limit: Customers={self.max_requests_per_minute}/min, Admins={self.admin_max_requests}/min")
+        # Database
+        self.DB_ENABLED = GLOBAL_DB_ENABLED
+        if self.DB_ENABLED:
+            self.init_database()
+        
+        self.log_info("=" * 60)
+        self.log_info("TRADING SIGNAL SERVER v4.2 - PRODUCTION READY")
+        self.log_info("=" * 60)
+        self.log_info(f"Server: {self.host}:{self.port}")
+        self.log_info(f"Users: {self.count_users()} total users")
+        self.log_info(f"Rate Limits: Admins={self.admin_rate_limit}/min, Customers={self.customer_rate_limit}/min")
+        self.log_info(f"User Status: Active/Inactive tracking enabled")
+        self.log_info("=" * 60)
     
-    def load_api_keys(self):
-        """Load API keys from file for both admins and customers"""
-        api_keys_file = 'api_keys.json'
+    def count_users(self) -> int:
+        """Count total users"""
+        total = 0
+        for user_type in ["admins", "customers"]:
+            total += len(self.api_manager.api_keys.get(user_type, {}))
+        return total
+    
+    def load_config(self, config_file: str) -> Dict:
+        """Load configuration file"""
+        default_config = {
+            'server': {'host': '0.0.0.0', 'port': 9999},
+            'security': {
+                'rate_limit_per_minute': 60,
+                'admin_rate_limit': 120,
+                'max_connections': 100,
+                'session_timeout_minutes': 30
+            },
+            'signal_settings': {
+                'expiry_minutes': 5,
+                'max_active_signals': 10,
+                'check_interval_seconds': 60
+            }
+        }
         
         try:
-            if os.path.exists(api_keys_file):
-                with open(api_keys_file, 'r') as f:
-                    all_keys = json.load(f)
-                    
-                    # Separate admin and customer keys
-                    admin_keys = all_keys.get('admins', {})
-                    customer_keys = all_keys.get('customers', {})
-                    
-                    self.log_info(f"Loaded {len(admin_keys)} admin keys and {len(customer_keys)} customer keys")
-                    return admin_keys, customer_keys
-        except Exception as e:
-            self.log_warning(f"Error loading API keys: {e}")
-        
-        # Default API keys (for testing/fallback)
-        default_admin_keys = {
-            "ADMIN_001": "sk_admin_secure123",
-            "ADMIN_002": "sk_admin_secure456",
-            "SUPER_ADMIN": "sk_admin_super789"
-        }
-        
-        default_customer_keys = {
-            "CUST_001": "sk_cust_abc123def456",
-            "CUST_002": "sk_cust_xyz789uvw012",
-            "CUST_003": "sk_cust_mno345pqr678",
-            "CUST_004": "sk_cust_jkl234mno567",
-            "CUST_005": "sk_cust_efg890hij123"
-        }
-        
-        self.log_warning(f"Using default API keys. Create {api_keys_file} for production.")
-        return default_admin_keys, default_customer_keys
+            with open(config_file, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            self.log_warning(f"Config file {config_file} not found, using defaults")
+            return default_config
+        except json.JSONDecodeError as e:
+            self.log_warning(f"Error parsing config: {e}, using defaults")
+            return default_config
     
-    def check_rate_limit(self, user_id, is_admin=False):
-        """Check if user has exceeded rate limit"""
-        now = time.time()
-        one_minute_ago = now - 60
-        
-        # Use different limits for admin and customer
-        max_requests = self.admin_max_requests if is_admin else self.max_requests_per_minute
-        
-        # Initialize if not exists
-        if user_id not in self.rate_limits:
-            self.rate_limits[user_id] = []
-        
-        # Remove old requests
-        self.rate_limits[user_id] = [
-            t for t in self.rate_limits[user_id] 
-            if t > one_minute_ago
-        ]
-        
-        # Check limit
-        if len(self.rate_limits[user_id]) >= max_requests:
-            return False
-        
-        # Add current request
-        self.rate_limits[user_id].append(now)
-        return True
+    def _setup_logging(self):
+        """Setup logging"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] INFO: Logging initialized")
     
-    def create_session(self, user_id, client_type):
-        """Create new session for user"""
+    def log_info(self, message: str):
+        """Log info message"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] INFO: {message}")
+    
+    def log_error(self, message: str):
+        """Log error message"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] ERROR: {message}")
+    
+    def log_warning(self, message: str):
+        """Log warning message"""
+        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        print(f"[{timestamp}] WARNING: {message}")
+    
+    def authenticate_user(self, request: Dict) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
+        """
+        Unified authentication dengan cek status user
+        Returns: (success, user_type, user_id, session_id)
+        """
+        api_key = request.get('api_key', '')
+        session_id = request.get('session_id', '')
+        action = request.get('action', '')
+        
+        # 1. Check session first
+        if session_id:
+            valid, user_data = self.validate_session(session_id)
+            if valid:
+                user_id = user_data['user_id']
+                user_type = user_data['user_type']
+                self.active_sessions[session_id]['last_activity'] = time.time()
+                self.log_info(f"Session validated for {user_type} {user_id}")
+                return True, user_type, user_id, session_id
+        
+        # 2. Determine user type
+        user_type = None
+        user_id = None
+        
+        if 'admin_id' in request:
+            user_type = 'admins'
+            user_id = request['admin_id']
+        elif 'customer_id' in request:
+            user_type = 'customers'
+            user_id = request['customer_id']
+        else:
+            self.log_warning("No user identifier found in request")
+            return False, None, None, None
+        
+        # 3. Validate API key dan status
+        if not api_key:
+            self.log_warning(f"No API key provided for {user_type} {user_id}")
+            return False, None, None, None
+        
+        if self.api_manager.validate_api_key(user_type, user_id, api_key):
+            session_id = self.create_session(user_id, user_type)
+            self.log_info(f"Authentication successful for {user_type} {user_id}")
+            
+            if user_type == 'admins' and action:
+                self.log_admin_activity(user_id, "login", f"Action: {action}")
+            
+            return True, user_type, user_id, session_id
+        
+        self.log_warning(f"Authentication failed for {user_type} {user_id}")
+        return False, None, None, None
+    
+    def create_session(self, user_id: str, user_type: str) -> str:
+        """Create new session"""
         session_id = str(uuid.uuid4())
         self.active_sessions[session_id] = {
             'user_id': user_id,
-            'client_type': client_type,
+            'user_type': user_type,
             'login_time': time.time(),
             'last_activity': time.time()
         }
         return session_id
     
-    def validate_session(self, session_id, user_id):
-        """Validate user session"""
+    def validate_session(self, session_id: str) -> Tuple[bool, Optional[Dict]]:
+        """Validate session"""
         if session_id not in self.active_sessions:
-            return False
+            return False, None
         
         session = self.active_sessions[session_id]
-        
-        # Check if session belongs to user
-        if session['user_id'] != user_id:
-            return False
-        
-        # Check if session expired
         current_time = time.time()
+        
         if current_time - session['last_activity'] > self.session_timeout:
             del self.active_sessions[session_id]
+            return False, None
+        
+        session['last_activity'] = current_time
+        return True, session
+    
+    def check_rate_limit(self, user_id: str, user_type: str) -> bool:
+        """Check rate limit"""
+        max_requests = self.admin_rate_limit if user_type == 'admins' else self.customer_rate_limit
+        
+        now = time.time()
+        one_minute_ago = now - 60
+        
+        if user_id not in self.rate_limits:
+            self.rate_limits[user_id] = []
+        
+        self.rate_limits[user_id] = [t for t in self.rate_limits[user_id] if t > one_minute_ago]
+        
+        if len(self.rate_limits[user_id]) >= max_requests:
             return False
         
-        # Update last activity
-        session['last_activity'] = current_time
+        self.rate_limits[user_id].append(now)
         return True
     
-    def authenticate(self, request, client_type):
-        """
-        Authenticate client with API Key (both admin and customer)
-        Also supports legacy password for backward compatibility
-        """
-        password = request.get('password', '')
-        api_key = request.get('api_key', '')
-        user_id = request.get('admin_id') if client_type == 'admin' else request.get('customer_id', '')
-        session_id = request.get('session_id', '')
-        
-        # If session ID provided, validate it
-        if session_id and user_id:
-            if self.validate_session(session_id, user_id):
-                return True, user_id
-        
-        if client_type == 'admin':
-            # Method 1: API Key authentication
-            if api_key:
-                # Check if API key exists in admin keys
-                for admin_id, key in self.admin_api_keys.items():
-                    if api_key == key:
-                        # If admin_id provided, must match
-                        if user_id and user_id != admin_id:
-                            continue
-                        
-                        # Create session
-                        session_id = self.create_session(admin_id, 'admin')
-                        self.log_info(f"Admin authenticated via API key: {admin_id}, Session: {session_id[:8]}...")
-                        
-                        # Log admin activity
-                        self.log_admin_activity(admin_id, "login", "API Key authentication")
-                        
-                        return True, admin_id, session_id
+    def handle_client(self, client_socket, address):
+        """Handle client connection"""
+        try:
+            data = client_socket.recv(4096).decode('utf-8')
+            if not data:
+                return
             
-            # Method 2: Legacy password (backward compatibility)
-            if password:
-                # Check if password matches any admin key (for migration)
-                for admin_id, key in self.admin_api_keys.items():
-                    if password == key:
-                        self.log_info(f"Admin authenticated via legacy password: {admin_id}")
-                        
-                        # Create session
-                        session_id = self.create_session(admin_id, 'admin')
-                        self.log_admin_activity(admin_id, "login", "Legacy password")
-                        
-                        return True, admin_id, session_id
+            request = json.loads(data)
             
-            self.log_warning(f"Admin authentication failed for: {user_id}")
-            return False, None, None
+            # Authentication
+            auth_success, user_type, user_id, session_id = self.authenticate_user(request)
+            
+            if not auth_success:
+                response = {
+                    'status': 'error',
+                    'message': 'Authentication failed. Check your API Key or user status.',
+                    'code': 'AUTH_FAILED'
+                }
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            # Rate limiting
+            if not self.check_rate_limit(user_id, user_type):
+                response = {
+                    'status': 'error',
+                    'message': f'Rate limit exceeded. Max {self.admin_rate_limit if user_type == "admins" else self.customer_rate_limit} requests per minute.',
+                    'code': 'RATE_LIMIT'
+                }
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            response_base = {'session_id': session_id}
+            
+            # Route to appropriate handler
+            if user_type == 'admins':
+                self.handle_admin_request(client_socket, request, user_id, session_id, response_base)
+            elif user_type == 'customers':
+                self.handle_customer_request(client_socket, request, user_id, session_id, response_base)
+            else:
+                response = {
+                    'status': 'error',
+                    'message': 'Invalid user type',
+                    'code': 'INVALID_USER_TYPE'
+                }
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                
+        except json.JSONDecodeError:
+            error_response = {'status': 'error', 'message': 'Invalid JSON format', 'code': 'INVALID_JSON'}
+            client_socket.send(json.dumps(error_response).encode('utf-8'))
+        except Exception as e:
+            self.log_error(f"Error handling client: {e}")
+            error_response = {'status': 'error', 'message': 'Internal server error', 'code': 'SERVER_ERROR'}
+            client_socket.send(json.dumps(error_response).encode('utf-8'))
+        finally:
+            try:
+                client_socket.close()
+            except:
+                pass
+    
+    def handle_admin_request(self, client_socket, request, admin_id, session_id, response_base):
+        """Handle admin requests termasuk user management"""
+        action = request.get('action', '')
         
-        elif client_type == 'customer':
-            # Method 1: API Key authentication
-            if api_key:
-                # Check if API key exists in customer keys
-                for cust_id, key in self.customer_api_keys.items():
-                    if api_key == key:
-                        # If customer_id provided, must match
-                        if user_id and user_id != cust_id:
-                            continue
-                        
-                        # Create session
-                        session_id = self.create_session(cust_id, 'customer')
-                        self.log_info(f"Customer authenticated via API key: {cust_id}, Session: {session_id[:8]}...")
-                        
-                        return True, cust_id, session_id
-            
-            # Method 2: Legacy password (backward compatibility)
-            if password:
-                # Check if password matches any customer key (for migration)
-                for cust_id, key in self.customer_api_keys.items():
-                    if password == key:
-                        self.log_info(f"Customer authenticated via legacy password: {cust_id}")
-                        
-                        # Create session
-                        session_id = self.create_session(cust_id, 'customer')
-                        
-                        return True, cust_id, session_id
-            
-            self.log_warning(f"Customer authentication failed for: {user_id}")
-            return False, None, None
+        if action == 'send_signal':
+            self.handle_send_signal(client_socket, request, admin_id, session_id, response_base)
+        elif action == 'get_stats':
+            self.handle_get_stats(client_socket, admin_id, session_id, response_base)
+        elif action == 'list_api_keys':
+            self.handle_list_keys(client_socket, admin_id, session_id, response_base)
+        elif action == 'list_users_with_status':
+            self.handle_list_users_with_status(client_socket, admin_id, session_id, response_base)
+        elif action == 'add_api_key':
+            self.handle_add_key(client_socket, request, admin_id, session_id, response_base)
+        elif action == 'set_user_status':
+            self.handle_set_user_status(client_socket, request, admin_id, session_id, response_base)
+        elif action == 'revoke_api_key':
+            self.handle_revoke_key(client_socket, request, admin_id, session_id, response_base)
+        else:
+            response = {
+                'status': 'error',
+                'message': f'Unknown action: {action}',
+                'code': 'UNKNOWN_ACTION'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_customer_request(self, client_socket, request, customer_id, session_id, response_base):
+        """Handle customer requests"""
+        action = request.get('action', 'check_signal')
         
-        return False, None, None
+        if action == 'check_signal':
+            self.handle_check_signal(client_socket, customer_id, session_id, response_base)
+        elif action == 'get_all_signals':
+            self.handle_get_all_signals(client_socket, customer_id, session_id, response_base)
+        else:
+            response = {
+                'status': 'error',
+                'message': f'Unknown action: {action}',
+                'code': 'UNKNOWN_ACTION'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_list_users_with_status(self, client_socket, admin_id, session_id, response_base):
+        """List all users with their status"""
+        try:
+            users_with_status = self.api_manager.get_all_users_with_status()
+            
+            response = {
+                'status': 'success',
+                'users': users_with_status,
+                'total_admins': len(users_with_status.get('admins', {})),
+                'total_customers': len(users_with_status.get('customers', {})),
+                'admin_id': admin_id
+            }
+            response.update(response_base)
+            
+            client_socket.send(json.dumps(response).encode('utf-8'))
+            
+        except Exception as e:
+            self.log_error(f"Error listing users with status: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error listing users: {str(e)}',
+                'code': 'LIST_USERS_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_set_user_status(self, client_socket, request, admin_id, session_id, response_base):
+        """Set user status (active/inactive)"""
+        try:
+            user_type = request.get('user_type', '').lower()
+            user_id = request.get('user_id', '')
+            status = request.get('status', '').lower()
+            
+            if not user_type or user_type not in ['admins', 'customers']:
+                response = {
+                    'status': 'error',
+                    'message': 'user_type must be "admins" or "customers"',
+                    'code': 'INVALID_USER_TYPE'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            if not user_id:
+                response = {
+                    'status': 'error',
+                    'message': 'user_id is required',
+                    'code': 'MISSING_FIELD'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            if not UserStatus.is_valid(status):
+                response = {
+                    'status': 'error',
+                    'message': 'status must be "active" or "inactive"',
+                    'code': 'INVALID_STATUS'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            # Cek apakah user ada
+            if user_id not in self.api_manager.api_keys.get(user_type, {}):
+                response = {
+                    'status': 'error',
+                    'message': f'User {user_id} not found in {user_type}',
+                    'code': 'USER_NOT_FOUND'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            success = self.api_manager.set_user_status(user_type, user_id, status)
+            
+            if success:
+                response = {
+                    'status': 'success',
+                    'message': f'User {user_type}/{user_id} status changed to {status}',
+                    'user_type': user_type,
+                    'user_id': user_id,
+                    'status': status,
+                    'admin_id': admin_id
+                }
+                self.log_admin_activity(admin_id, "set_user_status", 
+                                      f"Changed {user_type}/{user_id} to {status}")
+            else:
+                response = {
+                    'status': 'error',
+                    'message': 'Failed to change user status',
+                    'code': 'STATUS_CHANGE_ERROR'
+                }
+            
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+            
+        except Exception as e:
+            self.log_error(f"Error setting user status: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error setting user status: {str(e)}',
+                'code': 'STATUS_CHANGE_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_send_signal(self, client_socket, request, admin_id, session_id, response_base):
+        """Handle sending new signal"""
+        try:
+            required_fields = ['symbol', 'price', 'sl', 'tp', 'type']
+            for field in required_fields:
+                if field not in request:
+                    response = {
+                        'status': 'error',
+                        'message': f'Missing required field: {field}',
+                        'code': 'MISSING_FIELD'
+                    }
+                    response.update(response_base)
+                    client_socket.send(json.dumps(response).encode('utf-8'))
+                    return
+            
+            signal_type = request['type'].lower()
+            if signal_type not in ['buy', 'sell']:
+                response = {
+                    'status': 'error',
+                    'message': 'Signal type must be "buy" or "sell"',
+                    'code': 'INVALID_TYPE'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            try:
+                price = float(request['price'])
+                sl = float(request['sl'])
+                tp = float(request['tp'])
+            except ValueError:
+                response = {
+                    'status': 'error',
+                    'message': 'Price, SL, and TP must be numbers',
+                    'code': 'INVALID_NUMBER'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            with self.signal_lock:
+                signal_id = f"SIG_{int(time.time())}_{len(self.active_signals)}"
+                
+                signal_data = {
+                    'signal_id': signal_id,
+                    'symbol': request['symbol'],
+                    'price': price,
+                    'sl': sl,
+                    'tp': tp,
+                    'type': signal_type,
+                    'timestamp': datetime.now().isoformat(),
+                    'created_at': time.time(),
+                    'admin_id': admin_id,
+                    'expires_at': time.time() + (self.expiry_minutes * 60)
+                }
+                
+                self.active_signals.append(signal_data)
+                
+                # ✅ SIMPAN KE DATABASE
+                if self.db_enabled:
+                    try:
+                        success = self.db.add_signal(
+                            symbol=request['symbol'],
+                            price=price,
+                            sl=sl,
+                            tp=tp,
+                            signal_type=signal_type,
+                            admin_address=client_socket.getpeername()[0] if hasattr(client_socket, 'getpeername') else 'unknown',
+                            admin_id=admin_id,
+                            expiry_minutes=self.expiry_minutes
+                        )
+                        if success:
+                            self.log_info(f"Signal {signal_id} saved to database")
+                            self.db.log_admin_activity(
+                                admin_id=admin_id,
+                                action="send_signal",
+                                details=f"{request['symbol']} {signal_type} at {price}",
+                                ip_address=client_socket.getpeername()[0] if hasattr(client_socket, 'getpeername') else ''
+                            )
+                    except Exception as e:
+                        self.log_error(f"Failed to save signal to database: {e}")
+                
+                if len(self.active_signals) > self.max_active_signals:
+                    removed = self.active_signals.pop(0)
+                    self.log_info(f"Removed old signal: {removed['signal_id']}")
+                
+                self.log_info(f"New signal {signal_id} from admin {admin_id}: {request['symbol']} {signal_type}")
+                
+                response = {
+                    'status': 'success',
+                    'message': 'Signal created successfully',
+                    'signal': {
+                        'signal_id': signal_id,
+                        'symbol': request['symbol'],
+                        'type': signal_type,
+                        'price': price,
+                        'sl': sl,
+                        'tp': tp,
+                        'timestamp': signal_data['timestamp'],
+                        'expires_in': self.expiry_minutes * 60
+                    },
+                    'total_active_signals': len(self.active_signals)
+                }
+                response.update(response_base)
+                
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                
+        except Exception as e:
+            self.log_error(f"Error in send_signal: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error creating signal: {str(e)}',
+                'code': 'SIGNAL_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_check_signal(self, client_socket, customer_id, session_id, response_base):
+        """Handle customer checking for signals"""
+        try:
+            with self.signal_lock:
+                current_time = time.time()
+                expiry_seconds = self.expiry_minutes * 60
+                
+                valid_signals = []
+                for signal in self.active_signals:
+                    if current_time - signal['created_at'] <= expiry_seconds:
+                        valid_signals.append(signal)
+                
+                self.active_signals = valid_signals
+                
+                if customer_id not in self.customer_received_signals:
+                    self.customer_received_signals[customer_id] = set()
+                
+                received_signal_ids = self.customer_received_signals[customer_id]
+                
+                signals_for_customer = []
+                new_signals_count = 0
+                
+                for signal in self.active_signals:
+                    signal_id = signal['signal_id']
+                    
+                    signal_info = {
+                        'signal_id': signal_id,
+                        'symbol': signal['symbol'],
+                        'price': signal['price'],
+                        'sl': signal['sl'],
+                        'tp': signal['tp'],
+                        'type': signal['type'],
+                        'timestamp': signal['timestamp'],
+                        'admin_id': signal.get('admin_id', 'unknown'),
+                        'age_seconds': round(current_time - signal['created_at'], 1),
+                        'expires_in': round(expiry_seconds - (current_time - signal['created_at']), 1),
+                        'is_new': False
+                    }
+                    
+                    if signal_id not in received_signal_ids:
+                        signal_info['is_new'] = True
+                        new_signals_count += 1
+                        received_signal_ids.add(signal_id)
+                    
+                    signals_for_customer.append(signal_info)
+                
+                if signals_for_customer:
+                    response = {
+                        'status': 'success',
+                        'signal_available': True,
+                        'total_signals': len(signals_for_customer),
+                        'new_signals': new_signals_count,
+                        'signals': signals_for_customer,
+                        'customer_id': customer_id
+                    }
+                else:
+                    response = {
+                        'status': 'success',
+                        'signal_available': False,
+                        'message': 'No active signals available',
+                        'customer_id': customer_id
+                    }
+                
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                
+        except Exception as e:
+            self.log_error(f"Error in check_signal: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error checking signals: {str(e)}',
+                'code': 'CHECK_SIGNAL_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_list_keys(self, client_socket, admin_id, session_id, response_base):
+        """List API keys (masked)"""
+        try:
+            keys = self.api_manager.list_keys(mask=True)
+            
+            response = {
+                'status': 'success',
+                'api_keys': keys,
+                'total_admins': len(keys.get('admins', {})),
+                'total_customers': len(keys.get('customers', {})),
+                'admin_id': admin_id
+            }
+            response.update(response_base)
+            
+            client_socket.send(json.dumps(response).encode('utf-8'))
+            
+        except Exception as e:
+            self.log_error(f"Error listing keys: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error listing API keys: {str(e)}',
+                'code': 'LIST_KEYS_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_add_key(self, client_socket, request, admin_id, session_id, response_base):
+        """Add new API key"""
+        try:
+            user_type = request.get('user_type', '').lower()
+            user_id = request.get('user_id', '')
+            api_key = request.get('api_key', '')
+            
+            if not user_type or user_type not in ['admins', 'customers']:
+                response = {
+                    'status': 'error',
+                    'message': 'user_type must be "admins" or "customers"',
+                    'code': 'INVALID_USER_TYPE'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            if not user_id or not api_key:
+                response = {
+                    'status': 'error',
+                    'message': 'user_id and api_key are required',
+                    'code': 'MISSING_FIELDS'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            success = self.api_manager.add_api_key(user_type, user_id, api_key)
+            
+            if success:
+                response = {
+                    'status': 'success',
+                    'message': f'API key added for {user_type} {user_id}',
+                    'user_type': user_type,
+                    'user_id': user_id,
+                    'admin_id': admin_id
+                }
+                self.log_admin_activity(admin_id, "add_api_key", f"Added key for {user_type}/{user_id}")
+            else:
+                response = {
+                    'status': 'error',
+                    'message': 'Failed to add API key',
+                    'code': 'ADD_KEY_ERROR'
+                }
+            
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+            
+        except Exception as e:
+            self.log_error(f"Error adding key: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error adding API key: {str(e)}',
+                'code': 'ADD_KEY_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_revoke_key(self, client_socket, request, admin_id, session_id, response_base):
+        """Revoke API key"""
+        try:
+            user_type = request.get('user_type', '').lower()
+            user_id = request.get('user_id', '')
+            
+            if not user_type or user_type not in ['admins', 'customers']:
+                response = {
+                    'status': 'error',
+                    'message': 'user_type must be "admins" or "customers"',
+                    'code': 'INVALID_USER_TYPE'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            if not user_id:
+                response = {
+                    'status': 'error',
+                    'message': 'user_id is required',
+                    'code': 'MISSING_FIELD'
+                }
+                response.update(response_base)
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                return
+            
+            success = self.api_manager.revoke_api_key(user_type, user_id)
+            
+            if success:
+                response = {
+                    'status': 'success',
+                    'message': f'API key revoked for {user_type} {user_id}',
+                    'user_type': user_type,
+                    'user_id': user_id,
+                    'admin_id': admin_id
+                }
+                self.log_admin_activity(admin_id, "revoke_api_key", f"Revoked key for {user_type}/{user_id}")
+            else:
+                response = {
+                    'status': 'error',
+                    'message': 'Key not found or already revoked',
+                    'code': 'KEY_NOT_FOUND'
+                }
+            
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+            
+        except Exception as e:
+            self.log_error(f"Error revoking key: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error revoking API key: {str(e)}',
+                'code': 'REVOKE_KEY_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_get_stats(self, client_socket, admin_id, session_id, response_base):
+        """Get system statistics"""
+        try:
+            stats = {
+                'server_status': 'running',
+                'uptime_seconds': int(time.time() - self.start_time),
+                'active_signals': len(self.active_signals),
+                'total_customers': len(self.customer_received_signals),
+                'active_connections': self.active_connections,
+                'max_connections': self.max_connections,
+                'rate_limited_users': len(self.rate_limits),
+                'active_sessions': len(self.active_sessions),
+                'admin_activities': len(self.admin_activities),
+                'timestamp': datetime.now().isoformat(),
+                'admin_id': admin_id
+            }
+            
+            response = {
+                'status': 'success',
+                'stats': stats
+            }
+            response.update(response_base)
+            
+            client_socket.send(json.dumps(response).encode('utf-8'))
+            
+        except Exception as e:
+            self.log_error(f"Error getting stats: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error getting statistics: {str(e)}',
+                'code': 'STATS_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
+    
+    def handle_get_all_signals(self, client_socket, customer_id, session_id, response_base):
+        """Get all active signals for customer"""
+        try:
+            with self.signal_lock:
+                current_time = time.time()
+                expiry_seconds = self.expiry_minutes * 60
+                
+                active_signals = []
+                for signal in self.active_signals:
+                    if current_time - signal['created_at'] <= expiry_seconds:
+                        signal_info = signal.copy()
+                        signal_info['age_seconds'] = round(current_time - signal['created_at'], 1)
+                        signal_info['expires_in'] = round(expiry_seconds - (current_time - signal['created_at']), 1)
+                        active_signals.append(signal_info)
+                
+                response = {
+                    'status': 'success',
+                    'active_signals': active_signals,
+                    'total_signals': len(active_signals),
+                    'customer_id': customer_id
+                }
+                response.update(response_base)
+                
+                client_socket.send(json.dumps(response).encode('utf-8'))
+                
+        except Exception as e:
+            self.log_error(f"Error getting all signals: {e}")
+            response = {
+                'status': 'error',
+                'message': f'Error getting signals: {str(e)}',
+                'code': 'GET_SIGNALS_ERROR'
+            }
+            response.update(response_base)
+            client_socket.send(json.dumps(response).encode('utf-8'))
     
     def log_admin_activity(self, admin_id, action, details=""):
-        """Log admin activity for auditing"""
+        """Log admin activity"""
         activity = {
             'admin_id': admin_id,
             'action': action,
             'details': details,
-            'timestamp': datetime.now().isoformat(),
-            'ip': threading.current_thread().name
+            'timestamp': datetime.now().isoformat()
         }
-        
         self.admin_activities.append(activity)
         
-        # Keep only last 100 activities
         if len(self.admin_activities) > 100:
             self.admin_activities = self.admin_activities[-100:]
-        
-        # Log to database if enabled
-        if DB_ENABLED:
-            try:
-                database.log_admin_activity(admin_id, action, details)
-            except Exception as db_err:
-                self.log_warning(f"Database activity log warning: {db_err}")
     
     def init_database(self):
-        """Initialize database tables"""
-        if DB_ENABLED:
+        """Initialize database"""
+        if self.DB_ENABLED:
             try:
-                database.fix_database_issues()
-                self.log_info("Database system ready")
+                from database import database
+                self.log_info("Database initialized")
             except Exception as e:
-                self.log_warning(f"Database check warning: {e}")
-    
-    def log_info(self, message):
-        """Log info message"""
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f"[{timestamp}] INFO: {message}")
-        if logger:
-            logger.info(message)
-    
-    def log_error(self, message):
-        """Log error message"""
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f"[{timestamp}] ERROR: {message}")
-        if logger:
-            logger.error(message)
-    
-    def log_warning(self, message):
-        """Log warning message"""
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        print(f"[{timestamp}] WARNING: {message}")
-        if logger:
-            logger.warning(message)
+                self.log_warning(f"Database initialization warning: {e}")
     
     def start(self):
         """Start the server"""
         try:
+            self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.bind((self.host, self.port))
             self.server_socket.listen(5)
-            self.log_info(f"✅ Server running at {self.host}:{self.port}")
-            self.log_info("📡 Waiting for connections...")
-            self.log_info("🔔 Mode: Each customer gets EACH active signal ONCE")
-            self.log_info(f"📊 Max active signals: {self.max_active_signals}")
-            self.log_info(f"🔒 Security: API Key authentication for ALL users")
-            self.log_info(f"👥 Admins: {len(self.admin_api_keys)} | Customers: {len(self.customer_api_keys)}")
-            self.log_info(f"⚡ Rate limit: Customers={self.max_requests_per_minute}/min, Admins={self.admin_max_requests}/min")
             
-            # Thread untuk menerima koneksi
-            accept_thread = threading.Thread(target=self.accept_connections)
+            self.log_info(f"✅ Server running at {self.host}:{self.port}")
+            self.log_info("Ready for connections...")
+            
+            accept_thread = threading.Thread(target=self.accept_connections, name="AcceptThread")
             accept_thread.daemon = True
             accept_thread.start()
             
-            # Thread untuk cleanup dengan database
-            cleanup_thread = threading.Thread(target=self.periodic_cleanup_with_db)
+            cleanup_thread = threading.Thread(target=self.periodic_cleanup, name="CleanupThread")
             cleanup_thread.daemon = True
             cleanup_thread.start()
             
-            # Thread untuk statistik
-            stats_thread = threading.Thread(target=self.periodic_stats)
-            stats_thread.daemon = True
-            stats_thread.start()
-            
-            # Thread untuk cleanup rate limits
-            rate_limit_thread = threading.Thread(target=self.cleanup_rate_limits)
-            rate_limit_thread.daemon = True
-            rate_limit_thread.start()
-            
-            # Thread untuk session cleanup
-            session_thread = threading.Thread(target=self.cleanup_sessions)
-            session_thread.daemon = True
-            session_thread.start()
-            
-            # Tunggu sampai server dimatikan
             while self.running:
                 time.sleep(1)
                 
+        except OSError as e:
+            if "Address already in use" in str(e):
+                self.log_error(f"❌ Port {self.port} already in use!")
+            else:
+                self.log_error(f"❌ Failed to start server: {e}")
         except Exception as e:
-            self.log_error(f"Failed to start server: {e}")
-            self.log_error(f"Error details: {type(e).__name__}")
+            self.log_error(f"❌ Server error: {e}")
             traceback.print_exc()
         finally:
             self.stop()
     
-    def cleanup_rate_limits(self):
-        """Periodically clean up old rate limit entries"""
-        while self.running:
-            time.sleep(300)  # Setiap 5 menit
-            
-            try:
-                now = time.time()
-                five_minutes_ago = now - 300
-                
-                for user_id in list(self.rate_limits.keys()):
-                    # Hapus entries yang lebih dari 5 menit
-                    self.rate_limits[user_id] = [
-                        t for t in self.rate_limits[user_id] 
-                        if t > five_minutes_ago
-                    ]
-                    
-                    # Jika kosong, hapus key
-                    if not self.rate_limits[user_id]:
-                        del self.rate_limits[user_id]
-                
-                self.log_info(f"🧹 Rate limits cleanup: {len(self.rate_limits)} active users")
-                
-            except Exception as e:
-                self.log_error(f"Error in rate limit cleanup: {e}")
-    
-    def cleanup_sessions(self):
-        """Clean up expired sessions"""
-        while self.running:
-            time.sleep(60)  # Check every minute
-            
-            try:
-                now = time.time()
-                expired_sessions = []
-                
-                for session_id, session in self.active_sessions.items():
-                    if now - session['last_activity'] > self.session_timeout:
-                        expired_sessions.append(session_id)
-                
-                # Remove expired sessions
-                for session_id in expired_sessions:
-                    del self.active_sessions[session_id]
-                
-                if expired_sessions:
-                    self.log_info(f"🧹 Session cleanup: Removed {len(expired_sessions)} expired sessions")
-                    
-            except Exception as e:
-                self.log_error(f"Error in session cleanup: {e}")
-    
     def accept_connections(self):
-        """Accept connections from clients"""
+        """Accept incoming connections"""
         while self.running:
             try:
                 client_socket, address = self.server_socket.accept()
                 
-                # Check connection limit
                 with self.connection_lock:
                     if self.active_connections >= self.max_connections:
                         self.log_warning(f"Connection limit reached, rejecting {address}")
-                        error_response = {
-                            'status': 'error',
-                            'message': 'Server busy, too many connections'
-                        }
-                        client_socket.send(json.dumps(error_response).encode('utf-8'))
+                        error_response = {'status': 'error', 'message': 'Server busy, too many connections'}
+                        try:
+                            client_socket.send(json.dumps(error_response).encode('utf-8'))
+                        except:
+                            pass
                         client_socket.close()
                         continue
                     
                     self.active_connections += 1
                 
-                self.log_info(f"🔌 New connection from {address} (Active: {self.active_connections}/{self.max_connections})")
+                self.log_info(f"New connection from {address} (Active: {self.active_connections}/{self.max_connections})")
                 
-                # Log ke database
-                if DB_ENABLED:
-                    try:
-                        database.add_client_connection('unknown', str(address))
-                    except Exception as db_err:
-                        self.log_warning(f"Database log warning: {db_err}")
-                
-                # Buat thread untuk menangani client
                 client_thread = threading.Thread(
                     target=self.handle_client,
                     args=(client_socket, address)
@@ -477,734 +1156,79 @@ class TradingSignalServer:
                 if self.running:
                     self.log_error(f"Error accepting connection: {e}")
     
-    def handle_client(self, client_socket, address):
-        """Handle communication with client"""
-        try:
-            # Terima data awal
-            data = client_socket.recv(1024).decode('utf-8')
-            if not data:
-                return
-            
-            request = json.loads(data)
-            
-            # Identifikasi tipe client
-            client_type = request.get('client_type', 'customer')
-            user_id = request.get('admin_id') if client_type == 'admin' else request.get('customer_id', f"IP_{address[0]}")
-            
-            # === RATE LIMITING ===
-            if not self.check_rate_limit(user_id, client_type == 'admin'):
-                response = {
-                    'status': 'error', 
-                    'message': f'Rate limit exceeded. Maximum {self.admin_max_requests if client_type == "admin" else self.max_requests_per_minute} requests per minute.'
-                }
-                client_socket.send(json.dumps(response).encode('utf-8'))
-                client_socket.close()
-                self.log_warning(f"Rate limit exceeded for {user_id}")
-                return
-            
-            # Authentikasi dengan API Key
-            auth_result, auth_user_id, session_id = self.authenticate(request, client_type)
-            if not auth_result:
-                response = {
-                    'status': 'error', 
-                    'message': 'Authentication failed. Check your API Key or credentials.'
-                }
-                client_socket.send(json.dumps(response).encode('utf-8'))
-                client_socket.close()
-                self.log_warning(f"Authentication failed from {address}")
-                return
-            
-            # Update user_id with authenticated one
-            user_id = auth_user_id
-            
-            # Update database dengan client_type yang benar
-            if DB_ENABLED:
-                try:
-                    database.add_client_connection(client_type, str(address))
-                except Exception as db_err:
-                    self.log_warning(f"Database update warning: {db_err}")
-            
-            # Tambahkan session_id ke response
-            request['session_id'] = session_id
-            
-            if client_type == 'admin':
-                self.handle_admin(client_socket, request, address, user_id, session_id)
-            elif client_type == 'customer':
-                self.handle_customer(client_socket, request, address, user_id, session_id)
-            else:
-                response = {'status': 'error', 'message': 'Unknown client type'}
-                client_socket.send(json.dumps(response).encode('utf-8'))
-                
-        except json.JSONDecodeError:
-            self.log_error(f"Invalid JSON data from {address}")
-            error_response = {'status': 'error', 'message': 'Invalid JSON format'}
-            try:
-                client_socket.send(json.dumps(error_response).encode('utf-8'))
-            except:
-                pass
-        except Exception as e:
-            self.log_error(f"Error handling client {address}: {e}")
-            traceback.print_exc()
-        finally:
-            try:
-                client_socket.close()
-            except:
-                pass
-            
-            # Update connection count
-            with self.connection_lock:
-                self.active_connections -= 1
-            
-            # Update disconnect in database
-            if DB_ENABLED:
-                try:
-                    database.update_client_disconnect(str(address))
-                except:
-                    pass
-    
-    def handle_admin(self, client_socket, request, address, admin_id, session_id):
-        """Handle admin client with API Key authentication"""
-        try:
-            action = request.get('action')
-            
-            # Include session_id in all responses
-            base_response = {'session_id': session_id}
-            
-            if action == 'send_signal':
-                # Validasi data signal dengan TP
-                required_fields = ['symbol', 'price', 'sl', 'tp', 'type']
-                for field in required_fields:
-                    if field not in request:
-                        response = {'status': 'error', 'message': f'Missing field: {field}'}
-                        response.update(base_response)
-                        client_socket.send(json.dumps(response).encode('utf-8'))
-                        return
-                
-                # Validasi type
-                signal_type = request['type'].lower()
-                if signal_type not in ['buy', 'sell']:
-                    response = {'status': 'error', 'message': 'Type must be "buy" or "sell"'}
-                    response.update(base_response)
-                    client_socket.send(json.dumps(response).encode('utf-8'))
-                    return
-                
-                # Validasi TP berdasarkan type
-                try:
-                    price = float(request['price'])
-                    sl = float(request['sl'])
-                    tp = float(request['tp'])
-                except ValueError:
-                    response = {'status': 'error', 'message': 'Price, SL, and TP must be numbers'}
-                    response.update(base_response)
-                    client_socket.send(json.dumps(response).encode('utf-8'))
-                    return
-                
-                if signal_type == 'buy':
-                    if tp <= price:
-                        response = {'status': 'error', 'message': 'TP must be greater than entry price for BUY'}
-                        response.update(base_response)
-                        client_socket.send(json.dumps(response).encode('utf-8'))
-                        return
-                    if sl >= price:
-                        response = {'status': 'error', 'message': 'SL must be less than entry price for BUY'}
-                        response.update(base_response)
-                        client_socket.send(json.dumps(response).encode('utf-8'))
-                        return
-                else:  # sell
-                    if tp >= price:
-                        response = {'status': 'error', 'message': 'TP must be less than entry price for SELL'}
-                        response.update(base_response)
-                        client_socket.send(json.dumps(response).encode('utf-8'))
-                        return
-                    if sl <= price:
-                        response = {'status': 'error', 'message': 'SL must be greater than entry price for SELL'}
-                        response.update(base_response)
-                        client_socket.send(json.dumps(response).encode('utf-8'))
-                        return
-                
-                with self.signal_lock:
-                    # Simpan ke database jika enabled
-                    signal_id = None
-                    if DB_ENABLED:
-                        try:
-                            signal_id = database.add_signal(
-                                symbol=request['symbol'],
-                                price=price,
-                                sl=sl,
-                                tp=tp,
-                                signal_type=signal_type,
-                                admin_address=str(address),
-                                admin_id=admin_id,
-                                expiry_minutes=self.expiry_minutes
-                            )
-                            
-                            self.log_info(f"✅ Signal saved to database: ID={signal_id}")
-                            
-                        except Exception as db_error:
-                            self.log_error(f"Database error: {db_error}")
-                            # Fallback to in-memory storage
-                            signal_id = f"MEM_{int(time.time())}_{len(self.active_signals)}"
-                    
-                    # Generate signal ID jika tidak ada
-                    if not signal_id:
-                        signal_id = f"SIG_{int(time.time())}_{len(self.active_signals)}"
-                    
-                    # Buat signal object
-                    new_signal = {
-                        'signal_id': str(signal_id),
-                        'symbol': request['symbol'],
-                        'price': price,
-                        'sl': sl,
-                        'tp': tp,
-                        'type': signal_type,
-                        'timestamp': datetime.now().isoformat(),
-                        'created_at': time.time(),
-                        'admin_address': str(address),
-                        'admin_id': admin_id
-                    }
-                    
-                    # Tambahkan ke active signals
-                    self.active_signals.append(new_signal)
-                    
-                    # Batasi jumlah active signals
-                    if len(self.active_signals) > self.max_active_signals:
-                        # Hapus yang paling tua
-                        removed = self.active_signals.pop(0)
-                        self.log_info(f"🧹 Removed old signal: {removed['signal_id']}")
-                    
-                    # Log admin activity
-                    self.log_admin_activity(admin_id, "send_signal", 
-                                           f"{new_signal['symbol']} {new_signal['type']} at {new_signal['price']}")
-                    
-                    self.log_info(f"📡 New Signal #{signal_id} from admin {admin_id}")
-                    self.log_info(f"   Symbol: {new_signal['symbol']} {new_signal['type']}")
-                    self.log_info(f"   Price: {new_signal['price']}, SL: {new_signal['sl']}, TP: {new_signal['tp']}")
-                    self.log_info(f"   Active signals: {len(self.active_signals)}")
-                    
-                    response = {
-                        'status': 'success',
-                        'message': 'Signal successfully received',
-                        'signal': {
-                            'signal_id': str(signal_id),
-                            'symbol': new_signal['symbol'],
-                            'type': new_signal['type'],
-                            'price': new_signal['price'],
-                            'sl': new_signal['sl'],
-                            'tp': new_signal['tp'],
-                            'timestamp': new_signal['timestamp']
-                        },
-                        'total_active_signals': len(self.active_signals),
-                        'admin_id': admin_id
-                    }
-                    response.update(base_response)
-                    
-                    client_socket.send(json.dumps(response).encode('utf-8'))
-            
-            elif action == 'get_history':
-                # Kirim history dari database
-                limit = request.get('limit', 50)
-                
-                if DB_ENABLED:
-                    try:
-                        history = database.get_signal_history(limit=limit)
-                        response = {
-                            'status': 'success',
-                            'history': history,
-                            'admin_id': admin_id
-                        }
-                        response.update(base_response)
-                    except Exception as db_err:
-                        response = {
-                            'status': 'error',
-                            'message': f'Database error: {db_err}',
-                            'admin_id': admin_id
-                        }
-                        response.update(base_response)
-                else:
-                    response = {
-                        'status': 'error',
-                        'message': 'Database not available',
-                        'admin_id': admin_id
-                    }
-                    response.update(base_response)
-                client_socket.send(json.dumps(response).encode('utf-8'))
-            
-            elif action == 'get_stats':
-                # Kirim statistik
-                try:
-                    stats = self.get_system_stats(admin_id)
-                    response = {
-                        'status': 'success',
-                        'stats': stats,
-                        'admin_id': admin_id
-                    }
-                    response.update(base_response)
-                except Exception as e:
-                    response = {
-                        'status': 'error',
-                        'message': f'Error getting stats: {e}',
-                        'admin_id': admin_id
-                    }
-                    response.update(base_response)
-                client_socket.send(json.dumps(response).encode('utf-8'))
-            
-            elif action == 'get_health':
-                # Health check endpoint
-                health_stats = self.get_health_status()
-                response = {
-                    'status': 'success',
-                    'health': health_stats,
-                    'admin_id': admin_id
-                }
-                response.update(base_response)
-                client_socket.send(json.dumps(response).encode('utf-8'))
-                
-            elif action == 'get_admin_activity':
-                # Get admin activity log
-                limit = request.get('limit', 20)
-                activities = self.admin_activities[-limit:] if self.admin_activities else []
-                response = {
-                    'status': 'success',
-                    'activities': activities,
-                    'admin_id': admin_id,
-                    'total_activities': len(self.admin_activities)
-                }
-                response.update(base_response)
-                client_socket.send(json.dumps(response).encode('utf-8'))
-                
-            elif action == 'list_api_keys':
-                # List API keys (admin only)
-                response = {
-                    'status': 'success',
-                    'admin_keys': {k: '***' + v[-4:] for k, v in self.admin_api_keys.items()},
-                    'customer_keys': {k: '***' + v[-4:] for k, v in self.customer_api_keys.items()},
-                    'admin_id': admin_id
-                }
-                response.update(base_response)
-                client_socket.send(json.dumps(response).encode('utf-8'))
-                
-            else:
-                response = {'status': 'error', 'message': 'Invalid action'}
-                response.update(base_response)
-                client_socket.send(json.dumps(response).encode('utf-8'))
-                
-        except KeyError as e:
-            response = {'status': 'error', 'message': f'Field {e} not found'}
-            response.update(base_response)
-            client_socket.send(json.dumps(response).encode('utf-8'))
-            self.log_error(f"Key error in admin request: {e}")
-        except ValueError as e:
-            response = {'status': 'error', 'message': f'Invalid value: {e}'}
-            response.update(base_response)
-            client_socket.send(json.dumps(response).encode('utf-8'))
-            self.log_error(f"Value error in admin request: {e}")
-        except Exception as e:
-            self.log_error(f"Error handling admin: {e}")
-            traceback.print_exc()
-    
-    def get_health_status(self):
-        """Get health status for monitoring"""
-        import psutil
-        import os
-        
-        process = psutil.Process(os.getpid())
-        
-        return {
-            'status': 'healthy' if self.running else 'stopped',
-            'connections': self.active_connections,
-            'active_signals': len(self.active_signals),
-            'total_customers': len(self.customer_received_signals),
-            'uptime_seconds': int(time.time() - self.start_time),
-            'memory_mb': round(process.memory_info().rss / 1024 / 1024, 2),
-            'cpu_percent': process.cpu_percent(),
-            'rate_limited_users': len(self.rate_limits),
-            'active_sessions': len(self.active_sessions),
-            'admin_activities': len(self.admin_activities),
-            'timestamp': datetime.now().isoformat()
-        }
-    
-    def handle_customer(self, client_socket, request, address, customer_id, session_id):
-        """Handle customer client"""
-        try:
-            action = request.get('action', 'check_signal')
-            
-            # Include session_id in responses
-            base_response = {'session_id': session_id, 'customer_id': customer_id}
-            
-            if action == 'check_signal':
-                self._handle_customer_check_signal(client_socket, customer_id, address, session_id)
-            elif action == 'get_all_signals':
-                self._handle_customer_get_all_signals(client_socket, customer_id, session_id)
-            else:
-                self._handle_customer_check_signal(client_socket, customer_id, address, session_id)
-                
-        except Exception as e:
-            self.log_error(f"Error in handle_customer: {e}")
-            traceback.print_exc()
-            error_response = {
-                'status': 'error',
-                'message': f'Server error: {str(e)}',
-                'customer_id': customer_id
-            }
-            try:
-                client_socket.send(json.dumps(error_response).encode('utf-8'))
-            except:
-                pass
-    
-    def _handle_customer_check_signal(self, client_socket, customer_id, address, session_id):
-        """Handle customer checking for NEW signals"""
-        try:
-            new_signals_for_customer = []
-            
-            with self.signal_lock:
-                # Inisialisasi tracking untuk customer ini jika belum ada
-                if customer_id not in self.customer_received_signals:
-                    self.customer_received_signals[customer_id] = set()
-                
-                # Dapatkan signals yang sudah diterima oleh customer ini
-                received_signal_ids = self.customer_received_signals[customer_id]
-                
-                # Filter expired signals terlebih dahulu
-                current_time = time.time()
-                expiry_seconds = self.expiry_minutes * 60
-                
-                # Hapus signals yang expired
-                non_expired_signals = []
-                for signal in self.active_signals:
-                    signal_age = current_time - signal['created_at']
-                    if signal_age <= expiry_seconds:
-                        non_expired_signals.append(signal)
-                    else:
-                        self.log_info(f"🕒 Signal {signal['signal_id']} expired (age: {signal_age:.0f}s)")
-                
-                # Update active signals dengan yang belum expired
-                self.active_signals = non_expired_signals
-                
-                # Cari signals yang BELUM pernah diterima oleh customer ini
-                for signal in self.active_signals:
-                    signal_id = signal['signal_id']
-                    
-                    if signal_id not in received_signal_ids:
-                        # Ini signal baru untuk customer
-                        signal_copy = signal.copy()
-                        signal_copy['is_new'] = True
-                        signal_copy['age_seconds'] = current_time - signal['created_at']
-                        signal_copy['expires_in'] = expiry_seconds - (current_time - signal['created_at'])
-                        new_signals_for_customer.append(signal_copy)
-                        
-                        # Tandai sebagai sudah diterima
-                        received_signal_ids.add(signal_id)
-                        
-                        # Log ke database jika enabled
-                        if DB_ENABLED:
-                            try:
-                                database.mark_signal_sent(signal_id, customer_id)
-                            except Exception as db_err:
-                                self.log_warning(f"Database mark sent warning: {db_err}")
-                
-                # Log informasi
-                if new_signals_for_customer:
-                    self.log_info(f"🎯 Customer {customer_id} got {len(new_signals_for_customer)} NEW signals")
-                    self.log_info(f"   Total received by this customer: {len(received_signal_ids)}")
-            
-            # Kirim response dengan session_id
-            if new_signals_for_customer:
-                response = {
-                    'status': 'success',
-                    'signal_available': True,
-                    'new_signals_count': len(new_signals_for_customer),
-                    'signals': new_signals_for_customer,
-                    'customer_id': customer_id,
-                    'total_active_signals': len(self.active_signals),
-                    'server_time': datetime.now().isoformat(),
-                    'session_id': session_id
-                }
-            else:
-                response = {
-                    'status': 'success',
-                    'signal_available': False,
-                    'message': 'No new signals available',
-                    'customer_id': customer_id,
-                    'total_active_signals': len(self.active_signals),
-                    'total_received_signals': len(self.customer_received_signals.get(customer_id, set())),
-                    'server_time': datetime.now().isoformat(),
-                    'session_id': session_id
-                }
-            
-            client_socket.send(json.dumps(response).encode('utf-8'))
-            
-        except Exception as e:
-            self.log_error(f"Error in _handle_customer_check_signal: {e}")
-            traceback.print_exc()
-            error_response = {
-                'status': 'error',
-                'message': f'Server processing error: {str(e)}',
-                'customer_id': customer_id,
-                'session_id': session_id
-            }
-            try:
-                client_socket.send(json.dumps(error_response).encode('utf-8'))
-            except:
-                pass
-    
-    def _handle_customer_get_all_signals(self, client_socket, customer_id, session_id):
-        """Handle customer getting all active signals"""
-        try:
-            with self.signal_lock:
-                # Filter expired signals
-                current_time = time.time()
-                expiry_seconds = self.expiry_minutes * 60
-                
-                non_expired_signals = []
-                for signal in self.active_signals:
-                    signal_age = current_time - signal['created_at']
-                    if signal_age <= expiry_seconds:
-                        signal_copy = signal.copy()
-                        signal_copy['age_seconds'] = signal_age
-                        signal_copy['expires_in'] = expiry_seconds - signal_age
-                        
-                        # Cek apakah customer sudah menerima signal ini
-                        if customer_id in self.customer_received_signals:
-                            signal_copy['is_new'] = signal['signal_id'] not in self.customer_received_signals[customer_id]
-                        else:
-                            signal_copy['is_new'] = True
-                        
-                        non_expired_signals.append(signal_copy)
-                
-                # Update active signals
-                self.active_signals = [s for s in self.active_signals if (current_time - s['created_at']) <= expiry_seconds]
-            
-            response = {
-                'status': 'success',
-                'active_signals_count': len(non_expired_signals),
-                'signals': non_expired_signals,
-                'customer_id': customer_id,
-                'server_time': datetime.now().isoformat(),
-                'session_id': session_id
-            }
-            
-            client_socket.send(json.dumps(response).encode('utf-8'))
-            
-        except Exception as e:
-            self.log_error(f"Error in _handle_customer_get_all_signals: {e}")
-            error_response = {
-                'status': 'error',
-                'message': f'Server error: {str(e)}',
-                'customer_id': customer_id,
-                'session_id': session_id
-            }
-            try:
-                client_socket.send(json.dumps(error_response).encode('utf-8'))
-            except:
-                pass
-    
-    def get_system_stats(self, admin_id=None):
-        """Get system statistics"""
-        try:
-            with self.signal_lock:
-                stats = {
-                    'server_status': 'running',
-                    'server_time': datetime.now().isoformat(),
-                    'uptime_seconds': int(time.time() - self.start_time),
-                    'active_signals_count': len(self.active_signals),
-                    'total_customers_served': len(self.customer_received_signals),
-                    'max_active_signals': self.max_active_signals,
-                    'signal_expiry_minutes': self.expiry_minutes,
-                    'active_connections': self.active_connections,
-                    'max_connections': self.max_connections,
-                    'rate_limited_users': len(self.rate_limits),
-                    'active_sessions': len(self.active_sessions),
-                    'admin_activities_count': len(self.admin_activities)
-                }
-                
-                # Hitung total deliveries
-                total_deliveries = 0
-                for customer_id, signals in self.customer_received_signals.items():
-                    total_deliveries += len(signals)
-                
-                stats['total_signal_deliveries'] = total_deliveries
-                
-                # Info tentang active signals
-                if self.active_signals:
-                    stats['active_signals_info'] = []
-                    for signal in self.active_signals[-5:]:  # 5 signal terakhir
-                        signal_age = time.time() - signal['created_at']
-                        stats['active_signals_info'].append({
-                            'signal_id': signal['signal_id'],
-                            'symbol': signal['symbol'],
-                            'type': signal['type'],
-                            'age_seconds': int(signal_age),
-                            'expires_in': int((self.expiry_minutes * 60) - signal_age),
-                            'admin_id': signal.get('admin_id', 'unknown')
-                        })
-                
-                # Tambahkan admin-specific stats jika admin request
-                if admin_id:
-                    # Count signals sent by this admin
-                    admin_signals = [s for s in self.active_signals if s.get('admin_id') == admin_id]
-                    stats['your_signals_active'] = len(admin_signals)
-                    
-                    # Recent admin activities
-                    admin_activities = [a for a in self.admin_activities if a.get('admin_id') == admin_id]
-                    stats['your_recent_activities'] = admin_activities[-5:] if admin_activities else []
-                
-                # Tambahkan stats dari database jika ada
-                if DB_ENABLED:
-                    try:
-                        db_stats = database.get_statistics()
-                        stats['database_stats'] = db_stats
-                    except Exception as db_err:
-                        stats['database_stats'] = {'error': str(db_err), 'available': False}
-                
-                return stats
-                
-        except Exception as e:
-            self.log_error(f"Error in get_system_stats: {e}")
-            return {
-                'server_status': 'error',
-                'error': str(e),
-                'server_time': datetime.now().isoformat()
-            }
-    
-    def periodic_cleanup_with_db(self):
-        """Periodic cleanup expired signals"""
+    def periodic_cleanup(self):
+        """Periodic cleanup tasks"""
         while self.running:
-            time.sleep(60)  # Cek setiap 1 menit
+            time.sleep(60)
             
             try:
                 with self.signal_lock:
-                    # Cleanup expired signals in memory
                     current_time = time.time()
                     expiry_seconds = self.expiry_minutes * 60
                     
-                    # Hitung sebelum cleanup
-                    before_count = len(self.active_signals)
-                    
-                    # Filter hanya signals yang belum expired
+                    before = len(self.active_signals)
                     self.active_signals = [
-                        signal for signal in self.active_signals 
-                        if (current_time - signal['created_at']) <= expiry_seconds
+                        s for s in self.active_signals 
+                        if current_time - s['created_at'] <= expiry_seconds
                     ]
+                    after = len(self.active_signals)
                     
-                    # Log jika ada yang dihapus
-                    after_count = len(self.active_signals)
-                    if before_count > after_count:
-                        self.log_info(f"🧹 Cleaned up {before_count - after_count} expired signals")
+                    if before > after:
+                        self.log_info(f"Cleaned up {before - after} expired signals")
                 
-                # Cleanup expired signals in database
-                if DB_ENABLED:
-                    try:
-                        expired_count = database.expire_old_signals()
-                        if expired_count > 0:
-                            self.log_info(f"🗑️ Database cleanup: Expired {expired_count} signals")
-                    except Exception as db_err:
-                        self.log_warning(f"Database cleanup warning: {db_err}")
-            
+                current_time = time.time()
+                expired_sessions = []
+                
+                for session_id, session in self.active_sessions.items():
+                    if current_time - session['last_activity'] > self.session_timeout:
+                        expired_sessions.append(session_id)
+                
+                for session_id in expired_sessions:
+                    del self.active_sessions[session_id]
+                
+                if expired_sessions:
+                    self.log_info(f"Cleaned up {len(expired_sessions)} expired sessions")
+                    
             except Exception as e:
                 self.log_error(f"Error in periodic cleanup: {e}")
-                traceback.print_exc()
-    
-    def periodic_stats(self):
-        """Periodically log statistics"""
-        while self.running:
-            time.sleep(300)  # Setiap 5 menit
-            
-            try:
-                with self.signal_lock:
-                    if self.active_signals:
-                        self.log_info(f"📊 Active Signals Stats: {len(self.active_signals)} signals active")
-                        
-                        # Hitung deliveries per signal
-                        signal_deliveries = {}
-                        for customer_id, signals in self.customer_received_signals.items():
-                            for signal_id in signals:
-                                signal_deliveries[signal_id] = signal_deliveries.get(signal_id, 0) + 1
-                        
-                        # Log 3 signal terakhir
-                        for signal in self.active_signals[-3:]:
-                            deliveries = signal_deliveries.get(signal['signal_id'], 0)
-                            signal_age = time.time() - signal['created_at']
-                            self.log_info(f"   Signal {signal['signal_id']}: {signal['symbol']} {signal['type']}, "
-                                        f"Age: {signal_age:.0f}s, Delivered to {deliveries} customers")
-                    
-                    # Log customer stats
-                    total_customers = len(self.customer_received_signals)
-                    if total_customers > 0:
-                        total_deliveries = sum(len(s) for s in self.customer_received_signals.values())
-                        avg_signals_per_customer = total_deliveries / total_customers
-                        self.log_info(f"👥 Customer Stats: {total_customers} customers, "
-                                    f"{total_deliveries} total deliveries, "
-                                    f"{avg_signals_per_customer:.1f} signals/customer avg")
-                    
-                    # Log connection stats
-                    self.log_info(f"🔗 Connection Stats: {self.active_connections}/{self.max_connections} active")
-                    
-                    # Log session stats
-                    self.log_info(f"🔐 Session Stats: {len(self.active_sessions)} active sessions")
-                    
-                    # Log admin stats
-                    if self.admin_activities:
-                        self.log_info(f"🛠️  Admin Activities: {len(self.admin_activities)} total")
-                            
-            except Exception as e:
-                self.log_error(f"Error in periodic stats: {e}")
     
     def stop(self):
         """Stop the server"""
-        self.log_info("🛑 Stopping server...")
+        self.log_info("Stopping server...")
         self.running = False
         
-        # Tutup socket
         try:
-            self.server_socket.close()
+            if self.server_socket:
+                self.server_socket.close()
         except:
             pass
         
-        self.log_info("✅ Server stopped")
-
-def signal_handler(sig, frame):
-    """Handle Ctrl+C signal"""
-    print("\n🛑 Received stop signal...")
-    sys.exit(0)
+        self.log_info("Server stopped")
 
 def main():
     """Main function"""
-    port = int(os.environ.get('PORT', 9999))
+    print("=" * 60)
+    print("   TRADING SIGNAL SERVER v4.2 - PRODUCTION READY")
+    print("=" * 60)
+    print("Features:")
+    print("  • User status management (active/inactive)")
+    print("  • Web admin panel for user management")
+    print("  • API endpoints for user status control")
+    print("  • Enhanced security with user deactivation")
+    print("  • Session management with timeout")
+    print("  • Rate limiting per user type")
+    print("  • No hardcoded data - production ready")
+    print("=" * 60)
     
-    print("=" * 60)
-    print("        TRADING SIGNAL SERVER v4.0")
-    print("          API KEY AUTHENTICATION")
-    print("=" * 60)
-    print("🔔 FEATURES:")
-    print("  • API Key Authentication for ALL users")
-    print("  • Session Management")
-    print("  • Admin Activity Logging")
-    print("  • Rate Limiting (Admins: 120/min, Customers: 60/min)")
-    print("=" * 60)
-    print(f"📅 Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"🐍 Python: {sys.version}")
-    print(f"🌐 Port: {port}")
-    print(f"📊 Database: {'Enabled' if DB_ENABLED else 'Disabled (fallback mode)'}")
-    print(f"🔒 Security: API Keys Required")
-    print("=" * 60)
-    print()
-    
-    # Setup handler untuk Ctrl+C
-    signal.signal(signal.SIGINT, signal_handler)
-    
-    # Buat dan jalankan server
     server = TradingSignalServer()
     
     try:
         server.start()
     except KeyboardInterrupt:
-        print("\n🛑 Server stopped by user")
+        print("\nServer stopped by user")
     except Exception as e:
-        print(f"\n❌ Server crashed: {e}")
-        import traceback
+        print(f"\nServer error: {e}")
         traceback.print_exc()
-    finally:
-        server.stop()
 
 if __name__ == "__main__":
     main()
