@@ -1,208 +1,46 @@
-# ==========================================
-# .gitignore ENHANCED untuk Trading System
-# ==========================================
+# .gitignore untuk Windows
+# =========================
 
-# ============ KONFIGURASI PRODUKSI ============
-customer_config.json
-admin_config.json
-*.config.json
-config.local.json
-secrets.json
-credentials.json
+# Case-insensitive patterns untuk Windows
+[Ss]ignals.[Dd][Bb]
+[Aa][Pp][Ii]_[Kk][Ee][Yy][Ss]_*.[Jj][Ss][Oo][Nn]
+[Uu][Ss][Ee][Rr]_[Ss][Tt][Aa][Tt][Uu][Ss].[Jj][Ss][Oo][Nn]
+[Ee][Nn][Vv]*
+.[Dd][Ee][Vv]*
+.[Ee][Nn][Vv]*
 
-# ============ FILE USER MANAGEMENT ============
-api_keys_secure.json      # ← HARUS DIIGNORE!
-user_status.json          # ← HARUS DIIGNORE! (karena ada status user)
-api_keys_backup.json
-user_status_backup.json
+# Atau lebih simple, pakai pattern biasa
+# tapi pastikan Git config benar:
 
-# ============ DATABASE & BACKUP ============
+# Database files
 *.db
 *.sqlite
 *.sqlite3
-*.db-journal
 signals.db
-trading.db
-database.db
+
+# Secret files
+api_keys_secure.json
+user_status.json
+.env
+.env.*
+
+# Log files
+*.log
+logs/
+server.log
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+env/
+
+# System files (Windows specific)
+Thumbs.db
+Desktop.ini
+*.lnk
 
 # Backup files
 *.bak
 backup/
 backups/
-database_backup_*.db
-signals_backup_*.db
-
-# ============ LOG & HISTORY ============
-*.log
-logs/
-server.log
-access.log
-error.log
-gunicorn.log
-pm2.log
-
-# History files
-signals_history_*.json
-signals_export_*.csv
-signal_report_*.json
-export_*.csv
-history_*.json
-
-# ============ ENVIRONMENT ============
-.env
-.env.*
-.env.local
-.env.production
-.env.development
-.env.test
-environment.yml
-
-# ============ PYTHON ============
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-.hypothesis/
-.pytest_cache/
-
-# ============ SYSTEM & IDE ============
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-*.swp
-*.swo
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# Jupyter Notebook
-.ipynb_checkpoints
-
-# ============ PM2 & PROCESS MANAGER ============
-.pm2/
-.pm2.log
-.pid
-.sock
-
-# ============ SSL/TLS CERTIFICATES ============
-*.pem
-*.key
-*.crt
-*.csr
-ssl/
-certificates/
-
-# ============ UPLOADS & TEMP FILES ============
-uploads/
-tmp/
-temp/
-*.tmp
-*.temp
-.temp/
-session_*
-cache/
-
-# ============ DOCKER & CONTAINERS ============
-docker-compose.override.yml
-.dockerignore
-Dockerfile.local
-
-# ============ OS SPECIFIC ============
-# Linux
-*~
-
-# Windows
-*.cab
-*.msi
-*.msm
-*.msp
-
-# Windows Installer files
-*.cab
-*.msi
-*.msm
-*.msp
-
-# Windows shortcuts
-*.lnk
-
-# ============ BACKUP & ARCHIVE ============
-*.zip
-*.tar.gz
-*.rar
-*.7z
-
-# ============ CUSTOM FOR TRADING SYSTEM ============
-# File-file yang mungkin dibuat oleh system Anda
-trade_history/
-signal_cache/
-user_sessions/
-rate_limit_cache/
-
-# File testing
-test_*.json
-mock_*.json
-sample_*.json
-
-# File import/export
-import_*.csv
-export_*.json
-*.xlsx
-*.xls
-
-# File monitoring
-metrics_*.json
-performance_*.log
